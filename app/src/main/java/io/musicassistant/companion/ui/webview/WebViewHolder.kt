@@ -41,6 +41,14 @@ private class MaAndroidBridge {
         Log.d(TAG, "Metadata: $title - $artist ($album)")
         MediaSessionManager.updateMetadata(title, artist, album, artworkUrl)
     }
+
+    @JavascriptInterface
+    fun onPositionStateChanged(durationSec: Double, positionSec: Double, playbackRate: Double) {
+        val durationMs = (durationSec * 1000).toLong()
+        val positionMs = (positionSec * 1000).toLong()
+        Log.d(TAG, "Position: ${positionSec.toInt()}s / ${durationSec.toInt()}s @ ${playbackRate}x")
+        MediaSessionManager.updatePositionState(durationMs, positionMs, playbackRate.toFloat())
+    }
 }
 
 /**

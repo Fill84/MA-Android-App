@@ -2,8 +2,10 @@ package io.musicassistant.companion.media
 
 import android.graphics.Bitmap
 import android.os.Looper
+import android.os.SystemClock
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import com.google.common.util.concurrent.Futures
@@ -27,11 +29,25 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
     private var _album: String = ""
     private var _artwork: Bitmap? = null
     private var _hasMedia: Boolean = false
+    private var _durationMs: Long = 0L
+    private var _positionMs: Long = 0L
+    private var _positionTimestamp: Long = SystemClock.elapsedRealtime()
+    private var _playbackSpeed: Float = 1.0f
 
     /** Callback to route commands back to the WebView's Sendspin player */
     var onCommandReceived: ((String) -> Unit)? = null
 
+    /** Callback to route seek-to-position commands back to the WebView */
+    var onSeekTo: ((Double) -> Unit)? = null
+
     override fun getState(): State {
+        // Calculate current position based on elapsed time since last JS update
+        val elapsedSinceUpdate = if (_isPlaying)
+            SystemClock.elapsedRealtime() - _positionTimestamp else 0L
+        val calculatedPosition = _positionMs + (elapsedSinceUpdate * _playbackSpeed).toLong()
+        val position = if (_durationMs > 0)
+            calculatedPosition.coerceIn(0, _durationMs) else calculatedPosition.coerceAtLeast(0)
+
         val stateBuilder = State.Builder()
             .setAvailableCommands(buildAvailableCommands())
             .setPlayWhenReady(
@@ -41,7 +57,8 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
             .setPlaybackState(
                 if (_hasMedia) STATE_READY else STATE_IDLE
             )
-            .setContentPositionMs(0L)
+            .setContentPositionMs(position)
+            .setPlaybackParameters(PlaybackParameters(_playbackSpeed))
 
         if (_hasMedia) {
             val metadata = MediaMetadata.Builder()
@@ -65,6 +82,7 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
                 .setPlaylist(listOf(MediaItemData.Builder("current")
                     .setMediaItem(mediaItem)
                     .setMediaMetadata(metadata.build())
+                    .setDurationUs(_durationMs * 1000)
                     .build()))
                 .setCurrentMediaItemIndex(0)
         }
@@ -80,7 +98,9 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
                 Player.COMMAND_SEEK_TO_NEXT,
                 Player.COMMAND_SEEK_TO_PREVIOUS,
                 Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
-                Player.COMMAND_GET_METADATA
+                Player.COMMAND_GET_METADATA,
+                Player.COMMAND_GET_TIMELINE,
+                Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM
             )
             .build()
     }
@@ -103,6 +123,13 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
             Player.COMMAND_SEEK_TO_PREVIOUS,
             Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
                 onCommandReceived?.invoke("previoustrack")
+            }
+            Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM -> {
+                val positionSec = positionMs / 1000.0
+                onSeekTo?.invoke(positionSec)
+                _positionMs = positionMs
+                _positionTimestamp = SystemClock.elapsedRealtime()
+                invalidateState()
             }
         }
         return Futures.immediateVoidFuture()
@@ -130,6 +157,14 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
         invalidateState()
     }
 
+    fun updatePositionState(durationMs: Long, positionMs: Long, playbackSpeed: Float) {
+        _durationMs = durationMs
+        _positionMs = positionMs
+        _positionTimestamp = SystemClock.elapsedRealtime()
+        _playbackSpeed = if (playbackSpeed > 0f) playbackSpeed else 1.0f
+        invalidateState()
+    }
+
     fun clearState() {
         _isPlaying = false
         _title = ""
@@ -137,6 +172,10 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
         _album = ""
         _artwork = null
         _hasMedia = false
+        _durationMs = 0L
+        _positionMs = 0L
+        _positionTimestamp = SystemClock.elapsedRealtime()
+        _playbackSpeed = 1.0f
         invalidateState()
     }
 

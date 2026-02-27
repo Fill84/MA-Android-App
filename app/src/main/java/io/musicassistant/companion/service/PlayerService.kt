@@ -39,7 +39,7 @@ class PlayerService : Service() {
         const val ACTION_STOP = "io.musicassistant.companion.action.STOP"
         private const val MEDIA_ACTION_PREFIX = "io.musicassistant.companion.action.MEDIA_"
         private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "ma_player_service"
+        private const val CHANNEL_ID = "ma_player_channel"
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -150,15 +150,20 @@ class PlayerService : Service() {
     // --- Notification ---
 
     private fun createNotificationChannel() {
+        val nm = getSystemService(NotificationManager::class.java)
+
+        // Delete old channel (wrong importance) so existing installs get the new one
+        nm.deleteNotificationChannel("ma_player_service")
+
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Music Assistant Player",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
             description = "Shows when Music Assistant is playing audio"
             setShowBadge(false)
         }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        nm.createNotificationChannel(channel)
     }
 
     private fun updateNotification() {
@@ -207,6 +212,8 @@ class PlayerService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setColorized(true)
 
         // Set album art for the media notification background
         MediaSessionManager.artwork?.let { builder.setLargeIcon(it) }

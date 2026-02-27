@@ -55,6 +55,7 @@ object MediaSessionManager {
         val looper = Looper.getMainLooper()
         proxyPlayer = MaProxyPlayer(looper).apply {
             onCommandReceived = { action -> sendMediaActionToWebView(action) }
+            onSeekTo = { positionSec -> sendSeekToWebView(positionSec) }
         }
 
         mediaSession = MediaSession.Builder(context, proxyPlayer!!)
@@ -90,6 +91,12 @@ object MediaSessionManager {
         handler.post {
             proxyPlayer?.updatePlaybackState(playing)
             onMetadataOrStateChanged?.invoke()
+        }
+    }
+
+    fun updatePositionState(durationMs: Long, positionMs: Long, playbackSpeed: Float) {
+        handler.post {
+            proxyPlayer?.updatePositionState(durationMs, positionMs, playbackSpeed)
         }
     }
 
@@ -132,6 +139,13 @@ object MediaSessionManager {
 
     private fun sendMediaActionToWebView(action: String) {
         val js = "window.__ma_handlers && window.__ma_handlers['$action'] && window.__ma_handlers['$action']()"
+        handler.post {
+            WebViewHolder.webView?.evaluateJavascript(js, null)
+        }
+    }
+
+    private fun sendSeekToWebView(positionSec: Double) {
+        val js = "window.__ma_handlers && window.__ma_handlers['seekto'] && window.__ma_handlers['seekto']({ seekTime: $positionSec })"
         handler.post {
             WebViewHolder.webView?.evaluateJavascript(js, null)
         }
