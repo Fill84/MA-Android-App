@@ -18,6 +18,7 @@ import io.musicassistant.companion.MainActivity
 import io.musicassistant.companion.R
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.media.MediaSessionManager
+import io.musicassistant.companion.ui.webview.WebViewHolder
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
@@ -36,6 +37,7 @@ class PlayerService : Service() {
         private const val TAG = "PlayerService"
         const val ACTION_START = "io.musicassistant.companion.action.START"
         const val ACTION_STOP = "io.musicassistant.companion.action.STOP"
+        private const val MEDIA_ACTION_PREFIX = "io.musicassistant.companion.action.MEDIA_"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "ma_player_service"
     }
@@ -48,9 +50,14 @@ class PlayerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> startKeepAlive()
-            ACTION_STOP -> stopKeepAlive()
+        val action = intent?.action
+        when {
+            action == ACTION_START -> startKeepAlive()
+            action == ACTION_STOP -> stopKeepAlive()
+            action?.startsWith(MEDIA_ACTION_PREFIX) == true -> {
+                val mediaAction = action.removePrefix(MEDIA_ACTION_PREFIX)
+                MediaSessionManager.dispatchMediaAction(mediaAction)
+            }
             else -> startKeepAlive()
         }
         return START_STICKY
@@ -76,8 +83,9 @@ class PlayerService : Service() {
             stopKeepAlive()
         } else {
             // Keep running - foreground service + notification stay active.
-            // WebView singleton survives because it's detached to application context.
+            // Ensure WebView stays alive with JS timers running.
             Log.i(TAG, "Task removed (app swiped from recents) - service continues running")
+            ensureWebViewAlive()
         }
     }
 
@@ -100,7 +108,35 @@ class PlayerService : Service() {
             else 0
         )
         acquireWakeLock()
+
+        // Ensure WebView exists (handles START_STICKY restart after process kill)
+        ensureWebViewAlive()
+
         Log.i(TAG, "Keep-alive started")
+    }
+
+    /**
+     * Ensures the WebView is alive and connected.
+     * Handles START_STICKY restarts (process was killed, WebView is gone)
+     * and task removal (ensures JS timers keep running).
+     */
+    private fun ensureWebViewAlive() {
+        if (WebViewHolder.webView != null) {
+            WebViewHolder.webView?.resumeTimers()
+            return
+        }
+
+        val settings = try {
+            runBlocking { SettingsModule.getRepository(this@PlayerService).settingsFlow.first() }
+        } catch (_: Exception) { return }
+
+        if (settings.serverUrl.isEmpty()) return
+
+        val serverHost = try {
+            java.net.URL(settings.serverUrl).host
+        } catch (_: Exception) { "" }
+
+        WebViewHolder.ensureAlive(this, settings.serverUrl, serverHost)
     }
 
     private fun stopKeepAlive() {
@@ -149,6 +185,12 @@ class PlayerService : Service() {
 
         val session = MediaSessionManager.getSession()
 
+        // Use track metadata for notification content
+        val notifTitle = MediaSessionManager.title.ifEmpty { "Music Assistant" }
+        val notifText = MediaSessionManager.artist.ifEmpty {
+            if (MediaSessionManager.isPlaying) "Playing" else "Connected"
+        }
+
         val playPauseIcon = if (MediaSessionManager.isPlaying) {
             android.R.drawable.ic_media_pause
         } else {
@@ -158,16 +200,18 @@ class PlayerService : Service() {
         val playPauseAction = if (MediaSessionManager.isPlaying) "pause" else "play"
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Music Assistant")
-            .setContentText(if (MediaSessionManager.isPlaying) "Playing" else "Connected")
+            .setContentTitle(notifTitle)
+            .setContentText(notifText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
+        // Set album art for the media notification background
+        MediaSessionManager.artwork?.let { builder.setLargeIcon(it) }
+
         if (session != null) {
-            // Create media action pending intents via broadcast
             val prevIntent = createMediaActionIntent("previoustrack")
             val playPauseIntent = createMediaActionIntent(playPauseAction)
             val nextIntent = createMediaActionIntent("nexttrack")
@@ -185,11 +229,6 @@ class PlayerService : Service() {
             builder.addAction(
                 NotificationCompat.Action.Builder(
                     android.R.drawable.ic_media_next, "Next", nextIntent
-                ).build()
-            )
-            builder.addAction(
-                NotificationCompat.Action.Builder(
-                    android.R.drawable.ic_delete, "Stop", stopIntent
                 ).build()
             )
 

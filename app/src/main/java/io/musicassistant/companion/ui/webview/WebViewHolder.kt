@@ -148,6 +148,58 @@ object WebViewHolder {
         contextWrapper?.setBaseContext(wv.context.applicationContext)
     }
 
+    /**
+     * Ensures the WebView is alive and JS timers are running.
+     * Creates a headless WebView if needed (for service-initiated restarts after process kill).
+     */
+    fun ensureAlive(context: Context, serverUrl: String, serverHost: String) {
+        if (webView != null) {
+            webView?.resumeTimers()
+            return
+        }
+
+        Log.i(TAG, "Recreating WebView headlessly for background operation")
+        val appContext = context.applicationContext
+        val wrapper = MutableContextWrapper(appContext)
+        contextWrapper = wrapper
+
+        webView = WebView(wrapper).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            @Suppress("DEPRECATION")
+            settings.databaseEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            settings.allowContentAccess = true
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.userAgentString = buildStableUserAgent()
+
+            setRendererPriorityPolicy(
+                WebView.RENDERER_PRIORITY_IMPORTANT,
+                false
+            )
+
+            addJavascriptInterface(MaAndroidBridge(), "__MA_ANDROID__")
+            webChromeClient = MaWebChromeClient()
+            webViewClient = MaWebViewClient(
+                serverHost = serverHost,
+                onPageLoaded = { Log.i(TAG, "Headless WebView page loaded") },
+                onError = { msg -> Log.w(TAG, "Headless WebView error: $msg") },
+                onRendererGone = {
+                    webView = null
+                    contextWrapper = null
+                    currentUrl = null
+                    Log.w(TAG, "Headless WebView renderer gone")
+                }
+            )
+
+            loadUrl(serverUrl)
+            currentUrl = serverUrl
+        }
+    }
+
     private fun applyDarkTheme(wv: WebView, isDark: Boolean) {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(wv.settings, isDark)

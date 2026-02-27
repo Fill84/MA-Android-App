@@ -41,6 +41,11 @@ object MediaSessionManager {
     var isPlaying = false
         private set
 
+    /** Public accessors for notification metadata */
+    val title: String get() = currentTitle
+    val artist: String get() = currentArtist
+    val artwork: Bitmap? get() = currentArtwork
+
     /** Callback for the service to rebuild the notification */
     var onMetadataOrStateChanged: (() -> Unit)? = null
 
@@ -121,6 +126,9 @@ object MediaSessionManager {
         proxyPlayer?.updateMetadata(currentTitle, currentArtist, currentAlbum, currentArtwork)
         onMetadataOrStateChanged?.invoke()
     }
+
+    /** Dispatch a media action to the web player (used by notification buttons) */
+    fun dispatchMediaAction(action: String) = sendMediaActionToWebView(action)
 
     private fun sendMediaActionToWebView(action: String) {
         val js = "window.__ma_handlers && window.__ma_handlers['$action'] && window.__ma_handlers['$action']()"
