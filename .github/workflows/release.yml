@@ -3,6 +3,17 @@ name: Release
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type (leave empty for auto-detect)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -14,7 +25,8 @@ concurrency:
 jobs:
   release:
     name: Version Bump & Release
-    if: "!contains(github.event.head_commit.message, 'chore: bump version')"
+    if: >-
+      !contains(github.event.head_commit.message || '', 'chore: bump version')
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +40,7 @@ jobs:
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          default_bump: patch
+          default_bump: ${{ github.event.inputs.bump || 'patch' }}
           dry_run: true
           custom_release_rules: "improve:minor,enhancement:minor,update:patch,refactor:patch,docs:patch,chore:patch"
           tag_prefix: v
@@ -44,6 +56,13 @@ jobs:
         id: new_version
         run: |
           NEW_VERSION="${{ steps.tag_version.outputs.new_version }}"
+          PREVIOUS_TAG="${{ steps.tag_version.outputs.previous_tag }}"
+
+          # First release: no previous tag exists, start at v2.0.0
+          if [ -z "$PREVIOUS_TAG" ] || [ "$PREVIOUS_TAG" = "v0.0.0" ]; then
+            NEW_VERSION="2.0.0"
+          fi
+
           if [ -z "$NEW_VERSION" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No version bump needed"
