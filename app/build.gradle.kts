@@ -12,7 +12,7 @@ android {
         applicationId = "io.musicassistant.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
+        versionCode = 2
         versionName = "2.0.0"
     }
 
