@@ -94,19 +94,14 @@ jobs:
         if: steps.new_version.outputs.skip != 'true'
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        if: steps.new_version.outputs.skip != 'true'
-        run: ./gradlew assembleDebug
-
       - name: Build release APK
         if: steps.new_version.outputs.skip != 'true'
         run: ./gradlew assembleRelease
 
-      - name: Rename APKs
+      - name: Rename APK
         if: steps.new_version.outputs.skip != 'true'
         run: |
           VERSION="${{ steps.new_version.outputs.version_name }}"
-          mv app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/Music_Assistant_${VERSION}_debug.apk"
           mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/Music_Assistant_${VERSION}.apk"
 
       - name: Commit version bump
@@ -136,5 +131,4 @@ jobs:
           generate_release_notes: true
           make_latest: true
           files: |
-            app/build/outputs/apk/debug/Music_Assistant_${{ steps.new_version.outputs.version_name }}_debug.apk
             app/build/outputs/apk/release/Music_Assistant_${{ steps.new_version.outputs.version_name }}.apk
