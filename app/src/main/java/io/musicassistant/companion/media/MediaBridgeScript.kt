@@ -1,24 +1,96 @@
 package io.musicassistant.companion.media
 
 /**
- * JavaScript injected into the WebView after page load.
+ * JavaScript that intercepts navigator.mediaSession to capture all metadata,
+ * playback state, position, and action handlers from the Sendspin web player
+ * and forward them to the native Android MediaSession via __MA_ANDROID__.
  *
- * This script:
- * 1. Wraps navigator.mediaSession.setActionHandler to capture handlers
- * 2. Wraps navigator.mediaSession.setPositionState to capture position/duration
- * 3. Polls navigator.mediaSession.metadata and playbackState every 2 seconds
- * 4. Falls back to polling audio element for position/duration data
- * 5. Forwards changes to the Android bridge via __MA_ANDROID__
+ * Two strategies:
+ * 1. INTERCEPTOR (primary): Replaces navigator.mediaSession with a custom object
+ *    before Sendspin initializes. This captures everything immediately on set,
+ *    prevents the WebView from creating a conflicting internal MediaSession,
+ *    and requires no polling. Needs injection at document start.
  *
- * This bridges the Sendspin web player's media state to the Android MediaSession.
+ * 2. FALLBACK (backup): Wraps methods on the existing navigator.mediaSession
+ *    and polls metadata/playbackState every 2 seconds. Used when the interceptor
+ *    cannot replace navigator.mediaSession (older WebViews or late injection).
  */
 const val MEDIA_BRIDGE_SCRIPT = """
 (function() {
     if (window.__ma_bridge_initialized) return;
-    window.__ma_bridge_initialized = true;
     window.__ma_handlers = {};
 
-    // Wrap navigator.mediaSession.setActionHandler to capture handlers
+    // --- Strategy 1: Replace navigator.mediaSession with interceptor ---
+    try {
+        var _metadata = null;
+        var _playbackState = 'none';
+
+        var interceptor = {
+            setActionHandler: function(action, handler) {
+                window.__ma_handlers[action] = handler;
+            },
+            setPositionState: function(state) {
+                if (state && window.__MA_ANDROID__) {
+                    window.__MA_ANDROID__.onPositionStateChanged(
+                        state.duration || 0, state.position || 0, state.playbackRate || 1
+                    );
+                }
+            },
+            setCameraActive: function() {},
+            setMicrophoneActive: function() {}
+        };
+
+        Object.defineProperty(interceptor, 'metadata', {
+            get: function() { return _metadata; },
+            set: function(val) {
+                _metadata = val;
+                if (val && window.__MA_ANDROID__) {
+                    var art = '';
+                    if (val.artwork && val.artwork.length > 0) {
+                        var rawArt = val.artwork[val.artwork.length - 1].src;
+                        if (rawArt) {
+                            try { art = new URL(rawArt, window.location.origin).href; }
+                            catch(e) { art = String(rawArt); }
+                        }
+                    }
+                    window.__MA_ANDROID__.onMetadataChanged(
+                        val.title || '', val.artist || '', val.album || '', art
+                    );
+                }
+            }
+        });
+
+        Object.defineProperty(interceptor, 'playbackState', {
+            get: function() { return _playbackState; },
+            set: function(val) {
+                _playbackState = val;
+                if (window.__MA_ANDROID__) {
+                    window.__MA_ANDROID__.onPlaybackStateChanged(val || 'none');
+                }
+            }
+        });
+
+        Object.defineProperty(navigator, 'mediaSession', {
+            get: function() { return interceptor; },
+            configurable: true
+        });
+
+        // Polyfill MediaMetadata — our early interception prevents the browser
+        // from initializing this constructor as part of the Media Session API.
+        if (typeof MediaMetadata === 'undefined') {
+            window.MediaMetadata = function MediaMetadata(init) {
+                this.title = (init && init.title) || '';
+                this.artist = (init && init.artist) || '';
+                this.album = (init && init.album) || '';
+                this.artwork = (init && init.artwork) || [];
+            };
+        }
+
+        window.__ma_bridge_initialized = true;
+        return; // Interceptor succeeded, no fallback needed
+    } catch(e) {}
+
+    // --- Strategy 2: Wrap methods + poll (fallback for late injection) ---
     try {
         var origSetAction = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
         navigator.mediaSession.setActionHandler = function(action, handler) {
@@ -27,7 +99,6 @@ const val MEDIA_BRIDGE_SCRIPT = """
         };
     } catch(e) {}
 
-    // Wrap navigator.mediaSession.setPositionState to capture position/duration
     var lastPosDur = '', lastPosPos = '', lastPosRate = '';
     try {
         var origSetPosition = navigator.mediaSession.setPositionState.bind(navigator.mediaSession);
@@ -50,7 +121,6 @@ const val MEDIA_BRIDGE_SCRIPT = """
         };
     } catch(e) {}
 
-    // Poll metadata + playbackState every 2 seconds
     var lastState = '', lastTitle = '', lastArtist = '', lastAlbum = '', lastArt = '';
     setInterval(function() {
         try {
@@ -73,11 +143,8 @@ const val MEDIA_BRIDGE_SCRIPT = """
                     if (rawArt.startsWith('data:') || rawArt.startsWith('blob:')) {
                         art = rawArt;
                     } else {
-                        try {
-                            art = new URL(rawArt, window.location.origin).href;
-                        } catch(e) {
-                            art = rawArt;
-                        }
+                        try { art = new URL(rawArt, window.location.origin).href; }
+                        catch(e) { art = rawArt; }
                     }
                 }
             }
@@ -90,7 +157,6 @@ const val MEDIA_BRIDGE_SCRIPT = """
                 window.__MA_ANDROID__.onMetadataChanged(title, artist, album, art);
             }
 
-            // Fallback: poll audio element for position if setPositionState wasn't called
             var audio = document.querySelector('audio');
             if (audio && audio.duration && isFinite(audio.duration)) {
                 var dur = audio.duration;
@@ -108,5 +174,7 @@ const val MEDIA_BRIDGE_SCRIPT = """
             }
         } catch(e) {}
     }, 2000);
+
+    window.__ma_bridge_initialized = true;
 })();
 """

@@ -12,6 +12,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import io.musicassistant.companion.media.MEDIA_BRIDGE_SCRIPT
 import io.musicassistant.companion.media.MediaSessionManager
@@ -77,7 +78,8 @@ object WebViewHolder {
     private fun buildStableUserAgent(): String {
         val model = Build.MODEL
         val androidVersion = Build.VERSION.RELEASE
-        return "Mozilla/5.0 (Linux; Android $androidVersion; $model) " +
+        val buildId = Build.ID
+        return "Mozilla/5.0 (Linux; Android $androidVersion; $model Build/$buildId) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/131.0.0.0 Mobile Safari/537.36"
     }
@@ -127,6 +129,7 @@ object WebViewHolder {
             )
 
             addJavascriptInterface(MaAndroidBridge(), "__MA_ANDROID__")
+            injectBridgeAtDocumentStart(this)
 
             webChromeClient = MaWebChromeClient()
 
@@ -190,6 +193,7 @@ object WebViewHolder {
             )
 
             addJavascriptInterface(MaAndroidBridge(), "__MA_ANDROID__")
+            injectBridgeAtDocumentStart(this)
             webChromeClient = MaWebChromeClient()
             webViewClient = MaWebViewClient(
                 serverHost = serverHost,
@@ -205,6 +209,21 @@ object WebViewHolder {
 
             loadUrl(serverUrl)
             currentUrl = serverUrl
+        }
+    }
+
+    /**
+     * Injects the media bridge script at document start (before any page scripts).
+     * This ensures we intercept navigator.mediaSession before Sendspin initializes,
+     * capturing all metadata, playback state, and action handlers immediately.
+     * Falls back to onPageFinished injection on older WebViews.
+     */
+    private fun injectBridgeAtDocumentStart(wv: WebView) {
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(wv, MEDIA_BRIDGE_SCRIPT, setOf("*"))
+            Log.i(TAG, "Bridge script registered at document start")
+        } else {
+            Log.i(TAG, "DOCUMENT_START_SCRIPT not supported, falling back to onPageFinished")
         }
     }
 

@@ -22,7 +22,9 @@ class MaWebViewClient(
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
-        // Inject the media bridge script to capture playback state and metadata
+        // Fallback: inject bridge after page load for older WebViews that don't
+        // support DOCUMENT_START_SCRIPT. The script checks __ma_bridge_initialized
+        // and skips if the early injection already ran.
         view?.evaluateJavascript(MEDIA_BRIDGE_SCRIPT, null)
         onPageLoaded()
     }
