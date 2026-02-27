@@ -94,8 +94,22 @@ jobs:
         if: steps.new_version.outputs.skip != 'true'
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode release keystore
+        if: steps.new_version.outputs.skip != 'true'
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > app/release.keystore
+            echo "RELEASE_KEYSTORE_PATH=release.keystore" >> "$GITHUB_ENV"
+          fi
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+
       - name: Build release APK
         if: steps.new_version.outputs.skip != 'true'
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease
 
       - name: Rename APK
@@ -132,3 +146,22 @@ jobs:
           make_latest: true
           files: |
             app/build/outputs/apk/release/Music_Assistant_${{ steps.new_version.outputs.version_name }}.apk
+
+      - name: Build release AAB
+        if: steps.new_version.outputs.skip != 'true' && env.RELEASE_KEYSTORE_PATH != ''
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+
+      - name: Upload to Google Play
+        if: steps.new_version.outputs.skip != 'true' && env.RELEASE_KEYSTORE_PATH != ''
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: io.musicassistant.companion
+          releaseFiles: app/build/outputs/bundle/release/app-release.aab
+          track: production
+          status: completed
+          whatsNewDirectory: .github/whatsnew
