@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Music note with house roof hint -->
+    <!-- Simplified MA logo: house roof + double music note -->
+
+    <!-- House roof -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,2L2,9.5L3.5,11L12,4.5L20.5,11L22,9.5Z" />
+
+    <!-- Double music note -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M19,8V16.5C19,16.5 18.2,15.5 17,15.5C15.07,15.5 13.5,16.84 13.5,18.5C13.5,20.16 15.07,21.5 17,21.5C18.93,21.5 20.5,20.16 20.5,18.5V10.5H23V8H19ZM11,10V18.5C11,18.5 10.2,17.5 9,17.5C7.07,17.5 5.5,18.84 5.5,20.5C5.5,22.16 7.07,23.5 9,23.5C10.93,23.5 12.5,22.16 12.5,20.5V12.5H15V10H11Z" />
+</vector>

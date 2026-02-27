@@ -86,6 +86,43 @@ const val MEDIA_BRIDGE_SCRIPT = """
             };
         }
 
+        // Connection watchdog: detect stale connections and reload if needed.
+        // Tracks last bridge activity; if playback was active but no updates
+        // arrive for 60 seconds, the WebSocket likely died — reload to reconnect.
+        var _lastActivity = Date.now();
+        var _wasPlaying = false;
+        window.__ma_mark_activity = function() { _lastActivity = Date.now(); };
+
+        // Patch interceptor callbacks to track activity
+        var _origMetaSetter = Object.getOwnPropertyDescriptor(interceptor, 'metadata').set;
+        Object.defineProperty(interceptor, 'metadata', {
+            get: function() { return _metadata; },
+            set: function(val) { _lastActivity = Date.now(); _origMetaSetter(val); }
+        });
+        var _origStateSetter = Object.getOwnPropertyDescriptor(interceptor, 'playbackState').set;
+        Object.defineProperty(interceptor, 'playbackState', {
+            get: function() { return _playbackState; },
+            set: function(val) {
+                _lastActivity = Date.now();
+                if (val === 'playing') _wasPlaying = true;
+                else if (val === 'none') _wasPlaying = false;
+                _origStateSetter(val);
+            }
+        });
+        var _origSetPos = interceptor.setPositionState;
+        interceptor.setPositionState = function(state) {
+            _lastActivity = Date.now();
+            _origSetPos(state);
+        };
+
+        setInterval(function() {
+            var silentSec = (Date.now() - _lastActivity) / 1000;
+            if (_wasPlaying && silentSec > 60) {
+                _wasPlaying = false;
+                window.location.reload();
+            }
+        }, 30000);
+
         window.__ma_bridge_initialized = true;
         return; // Interceptor succeeded, no fallback needed
     } catch(e) {}

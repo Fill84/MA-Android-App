@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -40,9 +42,18 @@ class PlayerService : Service() {
         private const val MEDIA_ACTION_PREFIX = "io.musicassistant.companion.action.MEDIA_"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "ma_player_channel"
+        private const val TIMER_RESUME_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val timerResumeRunnable = object : Runnable {
+        override fun run() {
+            WebViewHolder.webView?.resumeTimers()
+            Log.d(TAG, "Periodic timer resume")
+            handler.postDelayed(this, TIMER_RESUME_INTERVAL_MS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -90,6 +101,7 @@ class PlayerService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(timerResumeRunnable)
         MediaSessionManager.release()
         releaseWakeLock()
         super.onDestroy()
@@ -111,6 +123,10 @@ class PlayerService : Service() {
 
         // Ensure WebView exists (handles START_STICKY restart after process kill)
         ensureWebViewAlive()
+
+        // Periodically resume WebView timers to prevent JS suspension in background
+        handler.removeCallbacks(timerResumeRunnable)
+        handler.postDelayed(timerResumeRunnable, TIMER_RESUME_INTERVAL_MS)
 
         Log.i(TAG, "Keep-alive started")
     }
@@ -141,6 +157,7 @@ class PlayerService : Service() {
 
     private fun stopKeepAlive() {
         Log.i(TAG, "Keep-alive stopped")
+        handler.removeCallbacks(timerResumeRunnable)
         MediaSessionManager.release()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -207,7 +224,7 @@ class PlayerService : Service() {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(notifTitle)
             .setContentText(notifText)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setSilent(true)
