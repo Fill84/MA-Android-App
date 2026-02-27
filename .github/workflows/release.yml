@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version Bump & Release
+    if: "!contains(github.event.head_commit.message, 'chore: bump version')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version bump (dry run)
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          dry_run: true
+          custom_release_rules: "improve:minor,enhancement:minor,update:patch,refactor:patch,docs:patch,chore:patch"
+          tag_prefix: v
+
+      - name: Read current versionCode
+        id: current
+        run: |
+          CURRENT_CODE=$(grep 'versionCode' app/build.gradle.kts | head -1 | sed 's/[^0-9]//g')
+          echo "version_code=$CURRENT_CODE" >> "$GITHUB_OUTPUT"
+          echo "Current versionCode: $CURRENT_CODE"
+
+      - name: Calculate new version
+        id: new_version
+        run: |
+          NEW_VERSION="${{ steps.tag_version.outputs.new_version }}"
+          if [ -z "$NEW_VERSION" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No version bump needed"
+            exit 0
+          fi
+          NEW_CODE=$(( ${{ steps.current.outputs.version_code }} + 1 ))
+          echo "version_name=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$NEW_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "New version: v$NEW_VERSION (versionCode: $NEW_CODE)"
+
+      - name: Update build.gradle.kts
+        if: steps.new_version.outputs.skip != 'true'
+        run: |
+          sed -i "s/versionCode = [0-9]*/versionCode = ${{ steps.new_version.outputs.version_code }}/" app/build.gradle.kts
+          sed -i "s/versionName = \".*\"/versionName = \"${{ steps.new_version.outputs.version_name }}\"/" app/build.gradle.kts
+          echo "Updated build.gradle.kts:"
+          grep -E 'versionCode|versionName' app/build.gradle.kts
+
+      - name: Set up JDK 17
+        if: steps.new_version.outputs.skip != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        if: steps.new_version.outputs.skip != 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        if: steps.new_version.outputs.skip != 'true'
+        run: ./gradlew assembleDebug
+
+      - name: Build release APK
+        if: steps.new_version.outputs.skip != 'true'
+        run: ./gradlew assembleRelease
+
+      - name: Commit version bump
+        if: steps.new_version.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/build.gradle.kts
+          git commit -m "chore: bump version to ${{ steps.new_version.outputs.tag }} (code ${{ steps.new_version.outputs.version_code }})"
+          git push
+
+      - name: Create git tag
+        if: steps.new_version.outputs.skip != 'true'
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          custom_tag: ${{ steps.new_version.outputs.version_name }}
+          tag_prefix: v
+
+      - name: Create GitHub Release
+        if: steps.new_version.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.new_version.outputs.version_name }}
+          name: v${{ steps.new_version.outputs.version_name }}
+          body: ${{ steps.tag_version.outputs.changelog }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
