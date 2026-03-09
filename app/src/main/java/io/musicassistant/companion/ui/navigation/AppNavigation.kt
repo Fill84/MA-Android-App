@@ -1,24 +1,79 @@
 package io.musicassistant.companion.ui.navigation
 
+import android.content.Intent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.settings.SettingsModule
+import io.musicassistant.companion.service.MusicService
+import io.musicassistant.companion.service.ServiceLocator
+import io.musicassistant.companion.ui.home.HomeScreen
+import io.musicassistant.companion.ui.home.HomeViewModel
 import io.musicassistant.companion.ui.launcher.LauncherScreen
-import io.musicassistant.companion.ui.main.MainScreen
+import io.musicassistant.companion.ui.library.AlbumDetailScreen
+import io.musicassistant.companion.ui.library.ArtistDetailScreen
+import io.musicassistant.companion.ui.library.LibraryScreen
+import io.musicassistant.companion.ui.library.LibraryViewModel
+import io.musicassistant.companion.ui.library.PlaylistDetailScreen
+import io.musicassistant.companion.ui.player.MiniPlayer
+import io.musicassistant.companion.ui.player.NowPlayingScreen
+import io.musicassistant.companion.ui.player.PlayerViewModel
+import io.musicassistant.companion.ui.player.QueueScreen
+import io.musicassistant.companion.ui.search.SearchScreen
+import io.musicassistant.companion.ui.search.SearchViewModel
 import io.musicassistant.companion.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 
 object Routes {
     const val LAUNCHER = "launcher"
     const val MAIN = "main"
+    const val HOME = "home"
+    const val SEARCH = "search"
+    const val LIBRARY = "library"
     const val SETTINGS = "settings"
+    const val NOW_PLAYING = "now_playing"
+    const val QUEUE = "queue"
+    const val ARTIST_DETAIL = "artist/{artistId}"
+    const val ALBUM_DETAIL = "album/{albumId}"
+    const val PLAYLIST_DETAIL = "playlist/{playlistId}"
 }
+
+private data class BottomNavItem(val route: String, val label: String, val icon: ImageVector)
+
+private val bottomNavItems =
+        listOf(
+                BottomNavItem(Routes.HOME, "Home", Icons.Default.Home),
+                BottomNavItem(Routes.SEARCH, "Search", Icons.Default.Search),
+                BottomNavItem(Routes.LIBRARY, "Library", Icons.Default.LibraryMusic),
+                BottomNavItem(Routes.SETTINGS, "Settings", Icons.Default.Settings)
+        )
 
 @Composable
 fun AppNavigation(navController: NavHostController = rememberNavController()) {
@@ -30,6 +85,13 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
         composable(Routes.LAUNCHER) {
             LauncherScreen(
                     onServerConnected = {
+                        // Start the music service to connect APIs
+                        val intent =
+                                Intent(context, MusicService::class.java).apply {
+                                    action = MusicService.ACTION_START
+                                }
+                        context.startService(intent)
+
                         navController.navigate(Routes.MAIN) {
                             popUpTo(Routes.LAUNCHER) { inclusive = true }
                         }
@@ -38,17 +100,171 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
         }
 
         composable(Routes.MAIN) {
-            MainScreen(
+            MainAppScreen(
                     onSwitchServer = {
                         scope.launch { settingsRepository.clearServer() }
+                        ServiceLocator.destroy()
                         navController.navigate(Routes.LAUNCHER) {
                             popUpTo(Routes.MAIN) { inclusive = true }
                         }
-                    },
-                    onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+                    }
             )
         }
+    }
+}
 
-        composable(Routes.SETTINGS) { SettingsScreen(onBack = { navController.popBackStack() }) }
+@Composable
+private fun MainAppScreen(onSwitchServer: () -> Unit) {
+    val innerNavController = rememberNavController()
+    val navBackStackEntry by innerNavController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+
+    // Shared ViewModels
+    val playerViewModel: PlayerViewModel = viewModel()
+    val libraryViewModel: LibraryViewModel = viewModel()
+    val homeViewModel: HomeViewModel = viewModel()
+    val searchViewModel: SearchViewModel = viewModel()
+
+    val showBottomBar =
+            currentRoute in listOf(Routes.HOME, Routes.SEARCH, Routes.LIBRARY, Routes.SETTINGS)
+    val showMiniPlayer = currentRoute != Routes.NOW_PLAYING && currentRoute != Routes.QUEUE
+
+    Scaffold(
+            bottomBar = {
+                Column {
+                    if (showMiniPlayer) {
+                        MiniPlayer(
+                                playerViewModel = playerViewModel,
+                                onClick = { innerNavController.navigate(Routes.NOW_PLAYING) }
+                        )
+                    }
+                    if (showBottomBar) {
+                        NavigationBar {
+                            bottomNavItems.forEach { item ->
+                                NavigationBarItem(
+                                        selected = currentRoute == item.route,
+                                        onClick = {
+                                            innerNavController.navigate(item.route) {
+                                                popUpTo(
+                                                        innerNavController.graph
+                                                                .findStartDestination()
+                                                                .id
+                                                ) { saveState = true }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
+                                        },
+                                        icon = { Icon(item.icon, contentDescription = item.label) },
+                                        label = { Text(item.label) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+    ) { innerPadding ->
+        Box(modifier = Modifier.padding(innerPadding)) {
+            NavHost(navController = innerNavController, startDestination = Routes.HOME) {
+                composable(Routes.HOME) {
+                    HomeScreen(
+                            homeViewModel = homeViewModel,
+                            playerViewModel = playerViewModel,
+                            onAlbumClick = { albumId ->
+                                innerNavController.navigate("album/$albumId")
+                            },
+                            onTrackClick = { track ->
+                                playerViewModel.playMedia(track.uri, MediaType.TRACK, "play")
+                            }
+                    )
+                }
+
+                composable(Routes.SEARCH) {
+                    SearchScreen(
+                            searchViewModel = searchViewModel,
+                            onArtistClick = { innerNavController.navigate("artist/$it") },
+                            onAlbumClick = { innerNavController.navigate("album/$it") },
+                            onTrackClick = { track ->
+                                playerViewModel.playMedia(track.uri, MediaType.TRACK, "play")
+                            },
+                            onPlaylistClick = { innerNavController.navigate("playlist/$it") },
+                            onRadioClick = { radio ->
+                                playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play")
+                            }
+                    )
+                }
+
+                composable(Routes.LIBRARY) {
+                    LibraryScreen(
+                            libraryViewModel = libraryViewModel,
+                            onArtistClick = { innerNavController.navigate("artist/$it") },
+                            onAlbumClick = { innerNavController.navigate("album/$it") },
+                            onTrackClick = { track ->
+                                playerViewModel.playMedia(track.uri, MediaType.TRACK, "play")
+                            },
+                            onPlaylistClick = { innerNavController.navigate("playlist/$it") },
+                            onRadioClick = { radio ->
+                                playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play")
+                            }
+                    )
+                }
+
+                composable(Routes.SETTINGS) { SettingsScreen(onBack = { onSwitchServer() }) }
+
+                composable(Routes.NOW_PLAYING) {
+                    NowPlayingScreen(
+                            playerViewModel = playerViewModel,
+                            onBack = { innerNavController.popBackStack() },
+                            onOpenQueue = { innerNavController.navigate(Routes.QUEUE) }
+                    )
+                }
+
+                composable(Routes.QUEUE) {
+                    QueueScreen(
+                            playerViewModel = playerViewModel,
+                            onBack = { innerNavController.popBackStack() }
+                    )
+                }
+
+                composable(
+                        Routes.ARTIST_DETAIL,
+                        arguments = listOf(navArgument("artistId") { type = NavType.StringType })
+                ) { entry ->
+                    val artistId = entry.arguments?.getString("artistId") ?: return@composable
+                    ArtistDetailScreen(
+                            artistId = artistId,
+                            libraryViewModel = libraryViewModel,
+                            playerViewModel = playerViewModel,
+                            onAlbumClick = { innerNavController.navigate("album/$it") },
+                            onBack = { innerNavController.popBackStack() }
+                    )
+                }
+
+                composable(
+                        Routes.ALBUM_DETAIL,
+                        arguments = listOf(navArgument("albumId") { type = NavType.StringType })
+                ) { entry ->
+                    val albumId = entry.arguments?.getString("albumId") ?: return@composable
+                    AlbumDetailScreen(
+                            albumId = albumId,
+                            libraryViewModel = libraryViewModel,
+                            playerViewModel = playerViewModel,
+                            onBack = { innerNavController.popBackStack() }
+                    )
+                }
+
+                composable(
+                        Routes.PLAYLIST_DETAIL,
+                        arguments = listOf(navArgument("playlistId") { type = NavType.StringType })
+                ) { entry ->
+                    val playlistId = entry.arguments?.getString("playlistId") ?: return@composable
+                    PlaylistDetailScreen(
+                            playlistId = playlistId,
+                            libraryViewModel = libraryViewModel,
+                            playerViewModel = playerViewModel,
+                            onBack = { innerNavController.popBackStack() }
+                    )
+                }
+            }
+        }
     }
 }

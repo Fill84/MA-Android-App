@@ -2,8 +2,14 @@
 -keep class io.musicassistant.companion.data.settings.AppSettings { *; }
 -keep class io.musicassistant.companion.data.settings.ThemeMode { *; }
 
-# Keep JavaScript interface class and methods (called from WebView JS)
--keep class io.musicassistant.companion.ui.webview.WebViewHolder$MaAndroidBridge { *; }
+# Keep kotlinx.serialization data models
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.AnnotationsKt
+-keepclassmembers @kotlinx.serialization.Serializable class io.musicassistant.companion.data.model.** {
+    *** Companion;
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep,includedescriptorclasses class io.musicassistant.companion.data.model.**$$serializer { *; }
 
 # Keep Media3 classes
 -keep class androidx.media3.** { *; }

@@ -21,6 +21,9 @@ class SettingsRepository(private val context: Context) {
         val BACKGROUND_PLAYBACK = booleanPreferencesKey("background_playback")
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val PLAYER_ID = stringPreferencesKey("player_id")
+        val AUTH_TOKEN = stringPreferencesKey("auth_token")
+        val USERNAME = stringPreferencesKey("username")
     }
 
     val settingsFlow: Flow<AppSettings> =
@@ -39,15 +42,20 @@ class SettingsRepository(private val context: Context) {
                                         ThemeMode.DARK
                                     }
                                 }
-                                        ?: ThemeMode.DARK
+                                        ?: ThemeMode.DARK,
+                        playerId = prefs[Keys.PLAYER_ID] ?: "",
+                        authToken = prefs[Keys.AUTH_TOKEN] ?: "",
+                        username = prefs[Keys.USERNAME] ?: ""
                 )
             }
 
-    suspend fun updateServer(url: String, name: String) {
+    suspend fun updateServer(url: String, name: String, token: String = "", username: String = "") {
         context.dataStore.edit { prefs ->
             prefs[Keys.SERVER_URL] = url
             prefs[Keys.SERVER_NAME] = name
             prefs[Keys.IS_CONFIGURED] = true
+            prefs[Keys.AUTH_TOKEN] = token
+            prefs[Keys.USERNAME] = username
         }
     }
 
@@ -56,6 +64,19 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.SERVER_URL] = ""
             prefs[Keys.SERVER_NAME] = ""
             prefs[Keys.IS_CONFIGURED] = false
+            prefs[Keys.AUTH_TOKEN] = ""
+            prefs[Keys.USERNAME] = ""
+        }
+    }
+
+    suspend fun setAuthToken(token: String) {
+        context.dataStore.edit { prefs -> prefs[Keys.AUTH_TOKEN] = token }
+    }
+
+    suspend fun logout() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.AUTH_TOKEN] = ""
+            prefs[Keys.USERNAME] = ""
         }
     }
 
@@ -69,5 +90,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { prefs -> prefs[Keys.THEME_MODE] = mode.name }
+    }
+
+    suspend fun setPlayerId(id: String) {
+        context.dataStore.edit { prefs -> prefs[Keys.PLAYER_ID] = id }
     }
 }

@@ -8,20 +8,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -39,12 +40,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.musicassistant.companion.BuildConfig
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.data.settings.ThemeMode
+import io.musicassistant.companion.service.ServiceLocator
 import io.musicassistant.companion.ui.theme.MaAccentGreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,14 +67,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             topBar = {
                 TopAppBar(
                         title = { Text(text = "Settings", fontWeight = FontWeight.Bold) },
-                        navigationIcon = {
-                            IconButton(onClick = onBack) {
-                                Icon(
-                                        Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "Back"
-                                )
-                            }
-                        },
                         colors =
                                 TopAppBarDefaults.topAppBarColors(
                                         containerColor = MaterialTheme.colorScheme.surface
@@ -90,6 +89,123 @@ fun SettingsScreen(onBack: () -> Unit) {
                         value = currentSettings.serverName.ifEmpty { "Not connected" }
                 )
                 InfoItem(title = "URL", value = currentSettings.serverUrl.ifEmpty { "-" })
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Login/Logout
+                if (currentSettings.authToken.isNotEmpty()) {
+                    // Logged in — show username and logout button
+                    if (currentSettings.username.isNotEmpty()) {
+                        InfoItem(title = "Logged in as", value = currentSettings.username)
+                    } else {
+                        InfoItem(title = "Status", value = "Logged in")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    settingsRepository.logout()
+                                    // Reconnect without auth
+                                    ServiceLocator.apiClient.disconnect()
+                                    ServiceLocator.apiClient.connect(
+                                            currentSettings.serverUrl,
+                                            null
+                                    )
+                                }
+                            }
+                    ) { Text("Logout") }
+                } else {
+                    // Not logged in — show login fields
+                    var loginUsername by remember { mutableStateOf(currentSettings.username) }
+                    var loginPassword by remember { mutableStateOf("") }
+                    var loginError by remember { mutableStateOf<String?>(null) }
+                    var isLoggingIn by remember { mutableStateOf(false) }
+
+                    OutlinedTextField(
+                            value = loginUsername,
+                            onValueChange = { loginUsername = it },
+                            label = { Text("Username") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                            value = loginPassword,
+                            onValueChange = { loginPassword = it },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions =
+                                    KeyboardOptions(
+                                            keyboardType = KeyboardType.Password,
+                                            imeAction = ImeAction.Done
+                                    )
+                    )
+                    loginError?.let { msg ->
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                                text = msg,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                            onClick = {
+                                if (loginUsername.isNotBlank() && loginPassword.isNotBlank()) {
+                                    isLoggingIn = true
+                                    loginError = null
+                                    scope.launch {
+                                        try {
+                                            val token =
+                                                    withContext(Dispatchers.IO) {
+                                                        ServiceLocator.apiClient.login(
+                                                                currentSettings.serverUrl,
+                                                                loginUsername.trim(),
+                                                                loginPassword
+                                                        )
+                                                    }
+                                            settingsRepository.updateServer(
+                                                    currentSettings.serverUrl,
+                                                    currentSettings.serverName,
+                                                    token,
+                                                    loginUsername.trim()
+                                            )
+                                            // Reconnect with new token
+                                            ServiceLocator.apiClient.disconnect()
+                                            ServiceLocator.apiClient.connect(
+                                                    currentSettings.serverUrl,
+                                                    token
+                                            )
+                                        } catch (e: Exception) {
+                                            loginError = e.message ?: "Login failed"
+                                        } finally {
+                                            isLoggingIn = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled =
+                                    loginUsername.isNotBlank() &&
+                                            loginPassword.isNotBlank() &&
+                                            !isLoggingIn,
+                            modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isLoggingIn) {
+                            CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(if (isLoggingIn) "Logging in..." else "Login")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(onClick = onBack) { Text("Switch Server") }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
