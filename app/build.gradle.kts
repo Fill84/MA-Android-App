@@ -72,10 +72,8 @@ dependencies {
     // Media3 for MediaSession, notification, lock screen controls
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.common)
-    implementation(libs.androidx.media3.exoplayer)
 
     implementation(libs.okhttp)
-    implementation(libs.coil.compose)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

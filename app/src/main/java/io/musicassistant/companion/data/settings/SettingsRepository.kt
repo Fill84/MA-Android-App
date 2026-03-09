@@ -5,7 +5,6 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -22,22 +21,27 @@ class SettingsRepository(private val context: Context) {
         val BACKGROUND_PLAYBACK = booleanPreferencesKey("background_playback")
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val THEME_MODE = stringPreferencesKey("theme_mode")
-        val SYNC_DELAY_MS = intPreferencesKey("sync_delay_ms")
     }
 
-    val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
-        AppSettings(
-            serverUrl = prefs[Keys.SERVER_URL] ?: "",
-            serverName = prefs[Keys.SERVER_NAME] ?: "",
-            isConfigured = prefs[Keys.IS_CONFIGURED] ?: false,
-            backgroundPlaybackEnabled = prefs[Keys.BACKGROUND_PLAYBACK] ?: true,
-            keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: false,
-            themeMode = prefs[Keys.THEME_MODE]?.let {
-                try { ThemeMode.valueOf(it) } catch (_: Exception) { ThemeMode.DARK }
-            } ?: ThemeMode.DARK,
-            syncDelayMs = prefs[Keys.SYNC_DELAY_MS] ?: 0
-        )
-    }
+    val settingsFlow: Flow<AppSettings> =
+            context.dataStore.data.map { prefs ->
+                AppSettings(
+                        serverUrl = prefs[Keys.SERVER_URL] ?: "",
+                        serverName = prefs[Keys.SERVER_NAME] ?: "",
+                        isConfigured = prefs[Keys.IS_CONFIGURED] ?: false,
+                        backgroundPlaybackEnabled = prefs[Keys.BACKGROUND_PLAYBACK] ?: true,
+                        keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: false,
+                        themeMode =
+                                prefs[Keys.THEME_MODE]?.let {
+                                    try {
+                                        ThemeMode.valueOf(it)
+                                    } catch (_: Exception) {
+                                        ThemeMode.DARK
+                                    }
+                                }
+                                        ?: ThemeMode.DARK
+                )
+            }
 
     suspend fun updateServer(url: String, name: String) {
         context.dataStore.edit { prefs ->
@@ -56,26 +60,14 @@ class SettingsRepository(private val context: Context) {
     }
 
     suspend fun setBackgroundPlayback(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.BACKGROUND_PLAYBACK] = enabled
-        }
+        context.dataStore.edit { prefs -> prefs[Keys.BACKGROUND_PLAYBACK] = enabled }
     }
 
     suspend fun setKeepScreenOn(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.KEEP_SCREEN_ON] = enabled
-        }
+        context.dataStore.edit { prefs -> prefs[Keys.KEEP_SCREEN_ON] = enabled }
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.THEME_MODE] = mode.name
-        }
-    }
-
-    suspend fun setSyncDelayMs(delayMs: Int) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.SYNC_DELAY_MS] = delayMs
-        }
+        context.dataStore.edit { prefs -> prefs[Keys.THEME_MODE] = mode.name }
     }
 }

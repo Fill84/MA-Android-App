@@ -23,7 +23,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -49,9 +48,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
-    onBack: () -> Unit
-) {
+fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val settingsRepository = remember { SettingsModule.getRepository(context) }
     val settings by settingsRepository.settingsFlow.collectAsState(initial = null)
@@ -60,43 +57,39 @@ fun SettingsScreen(
     val currentSettings = settings ?: return
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Settings",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+            topBar = {
+                TopAppBar(
+                        title = { Text(text = "Settings", fontWeight = FontWeight.Bold) },
+                        navigationIcon = {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back"
+                                )
+                            }
+                        },
+                        colors =
+                                TopAppBarDefaults.topAppBarColors(
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                )
                 )
-            )
-        }
+            }
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
+                modifier =
+                        Modifier.fillMaxSize()
+                                .padding(innerPadding)
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp)
         ) {
             // CONNECTION SECTION
             SectionHeader("CONNECTION")
             SettingsCard {
                 InfoItem(
-                    title = "Server",
-                    value = currentSettings.serverName.ifEmpty { "Not connected" }
+                        title = "Server",
+                        value = currentSettings.serverName.ifEmpty { "Not connected" }
                 )
-                InfoItem(
-                    title = "URL",
-                    value = currentSettings.serverUrl.ifEmpty { "-" }
-                )
+                InfoItem(title = "URL", value = currentSettings.serverUrl.ifEmpty { "-" })
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -105,20 +98,20 @@ fun SettingsScreen(
             SectionHeader("BEHAVIOR")
             SettingsCard {
                 SwitchItem(
-                    title = "Background playback",
-                    description = "Keep playing audio when the app is in the background",
-                    checked = currentSettings.backgroundPlaybackEnabled,
-                    onCheckedChange = {
-                        scope.launch { settingsRepository.setBackgroundPlayback(it) }
-                    }
+                        title = "Background playback",
+                        description = "Keep playing audio when the app is in the background",
+                        checked = currentSettings.backgroundPlaybackEnabled,
+                        onCheckedChange = {
+                            scope.launch { settingsRepository.setBackgroundPlayback(it) }
+                        }
                 )
                 SwitchItem(
-                    title = "Keep screen on",
-                    description = "Prevent screen from turning off while playing",
-                    checked = currentSettings.keepScreenOn,
-                    onCheckedChange = {
-                        scope.launch { settingsRepository.setKeepScreenOn(it) }
-                    }
+                        title = "Keep screen on",
+                        description = "Prevent screen from turning off while playing",
+                        checked = currentSettings.keepScreenOn,
+                        onCheckedChange = {
+                            scope.launch { settingsRepository.setKeepScreenOn(it) }
+                        }
                 )
             }
 
@@ -128,26 +121,8 @@ fun SettingsScreen(
             SectionHeader("APPEARANCE")
             SettingsCard {
                 ThemeDropdown(
-                    currentMode = currentSettings.themeMode,
-                    onModeSelected = {
-                        scope.launch { settingsRepository.setThemeMode(it) }
-                    }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // AUDIO SECTION
-            SectionHeader("AUDIO")
-            SettingsCard {
-                SliderItem(
-                    title = "Sync delay",
-                    description = "Adjust playback timing for multi-room sync (ms)",
-                    value = currentSettings.syncDelayMs,
-                    valueRange = -500..500,
-                    onValueChange = {
-                        scope.launch { settingsRepository.setSyncDelayMs(it) }
-                    }
+                        currentMode = currentSettings.themeMode,
+                        onModeSelected = { scope.launch { settingsRepository.setThemeMode(it) } }
                 )
             }
 
@@ -158,8 +133,8 @@ fun SettingsScreen(
             SettingsCard {
                 InfoItem(title = "Version", value = BuildConfig.VERSION_NAME)
                 InfoItem(
-                    title = "Application",
-                    value = "Music Assistant Companion v${BuildConfig.VERSION_NAME}"
+                        title = "Application",
+                        value = "Music Assistant Companion v${BuildConfig.VERSION_NAME}"
                 )
             }
 
@@ -171,181 +146,130 @@ fun SettingsScreen(
 @Composable
 private fun SectionHeader(title: String) {
     Text(
-        text = title,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
     )
 }
 
 @Composable
 private fun SettingsCard(content: @Composable () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            content()
-        }
-    }
+            modifier = Modifier.fillMaxWidth(),
+            colors =
+                    CardDefaults.cardColors(
+                            containerColor =
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
+    ) { Column(modifier = Modifier.padding(16.dp)) { content() } }
 }
 
 @Composable
 private fun InfoItem(title: String, value: String) {
     Column(modifier = Modifier.padding(vertical = 4.dp)) {
         Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Medium
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
         )
         Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
 @Composable
 private fun SwitchItem(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+        title: String,
+        description: String,
+        checked: Boolean,
+        onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium
             )
             Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Spacer(modifier = Modifier.width(16.dp))
         Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                checkedTrackColor = MaAccentGreen
-            )
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors =
+                        SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaAccentGreen
+                        )
         )
     }
 }
 
 @Composable
-private fun ThemeDropdown(
-    currentMode: ThemeMode,
-    onModeSelected: (ThemeMode) -> Unit
-) {
+private fun ThemeDropdown(currentMode: ThemeMode, onModeSelected: (ThemeMode) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Theme",
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
+                    text = "Theme",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium
             )
             Text(
-                text = "Choose the app theme",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Choose the app theme",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Spacer(modifier = Modifier.width(16.dp))
 
         OutlinedButton(onClick = { expanded = true }) {
             Text(
-                text = when (currentMode) {
-                    ThemeMode.SYSTEM -> "System"
-                    ThemeMode.DARK -> "Dark"
-                    ThemeMode.LIGHT -> "Light"
-                }
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            ThemeMode.entries.forEach { mode ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            when (mode) {
+                    text =
+                            when (currentMode) {
                                 ThemeMode.SYSTEM -> "System"
                                 ThemeMode.DARK -> "Dark"
                                 ThemeMode.LIGHT -> "Light"
                             }
-                        )
-                    },
-                    onClick = {
-                        onModeSelected(mode)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SliderItem(
-    title: String,
-    description: String,
-    value: Int,
-    valueRange: IntRange,
-    onValueChange: (Int) -> Unit
-) {
-    Column(modifier = Modifier.padding(vertical = 8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text(
-                text = "$value ms",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(start = 8.dp)
             )
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onValueChange(it.toInt()) },
-            valueRange = valueRange.first.toFloat()..valueRange.last.toFloat(),
-            steps = (valueRange.last - valueRange.first) / 50 - 1
-        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ThemeMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                        text = {
+                            Text(
+                                    when (mode) {
+                                        ThemeMode.SYSTEM -> "System"
+                                        ThemeMode.DARK -> "Dark"
+                                        ThemeMode.LIGHT -> "Light"
+                                    }
+                            )
+                        },
+                        onClick = {
+                            onModeSelected(mode)
+                            expanded = false
+                        }
+                )
+            }
+        }
     }
 }

@@ -21,18 +21,15 @@ import androidx.compose.ui.unit.dp
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.media.MediaSessionManager
 import io.musicassistant.companion.ui.webview.WebViewScreen
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 @Composable
-fun MainScreen(
-    onSwitchServer: () -> Unit,
-    onOpenSettings: () -> Unit
-) {
+fun MainScreen(onSwitchServer: () -> Unit, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val settingsRepository = remember { SettingsModule.getRepository(context) }
     val settings by settingsRepository.settingsFlow.collectAsState(initial = null)
@@ -41,97 +38,86 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
 
     ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            DrawerContent(
-                serverName = settings?.serverName ?: "",
-                serverUrl = settings?.serverUrl ?: "",
-                nowPlayingTitle = "", // Will be populated from MediaSessionManager state
-                nowPlayingArtist = "",
-                isPlaying = MediaSessionManager.isPlaying,
-                onHomeClick = {
-                    scope.launch { drawerState.close() }
-                },
-                onSwitchServer = {
-                    scope.launch { drawerState.close() }
-                    onSwitchServer()
-                },
-                onSettingsClick = {
-                    scope.launch { drawerState.close() }
-                    onOpenSettings()
-                }
-            )
-        },
-        gesturesEnabled = drawerState.isOpen // Only enable built-in gestures when open (for closing)
+            drawerState = drawerState,
+            drawerContent = {
+                DrawerContent(
+                        serverName = settings?.serverName ?: "",
+                        serverUrl = settings?.serverUrl ?: "",
+                        nowPlayingTitle = MediaSessionManager.title,
+                        nowPlayingArtist = MediaSessionManager.artist,
+                        isPlaying = MediaSessionManager.isPlaying,
+                        onHomeClick = { scope.launch { drawerState.close() } },
+                        onSwitchServer = {
+                            scope.launch { drawerState.close() }
+                            onSwitchServer()
+                        },
+                        onSettingsClick = {
+                            scope.launch { drawerState.close() }
+                            onOpenSettings()
+                        }
+                )
+            },
+            gesturesEnabled =
+                    drawerState.isOpen // Only enable built-in gestures when open (for closing)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .edgeSwipeToOpen(drawerState, scope)
-        ) {
-            WebViewScreen(
-                onDisconnect = onSwitchServer
-            )
+        Box(modifier = Modifier.fillMaxSize().edgeSwipeToOpen(drawerState, scope)) {
+            WebViewScreen(onDisconnect = onSwitchServer)
         }
     }
 }
 
 /**
- * Custom edge swipe detector that opens the drawer only on horizontal swipes
- * starting from the left edge of the screen. Vertical swipes are not intercepted,
- * allowing the WebView to scroll normally.
+ * Custom edge swipe detector that opens the drawer only on horizontal swipes starting from the left
+ * edge of the screen. Vertical swipes are not intercepted, allowing the WebView to scroll normally.
  */
-private fun Modifier.edgeSwipeToOpen(
-    drawerState: DrawerState,
-    scope: CoroutineScope
-): Modifier = pointerInput(Unit) {
-    val edgeWidth = 24.dp.toPx()
-    val swipeThreshold = 48.dp.toPx()
-    val maxAngleDegrees = 25f // Max deviation from horizontal
+private fun Modifier.edgeSwipeToOpen(drawerState: DrawerState, scope: CoroutineScope): Modifier =
+        pointerInput(Unit) {
+            val edgeWidth = 24.dp.toPx()
+            val swipeThreshold = 48.dp.toPx()
+            val maxAngleDegrees = 25f // Max deviation from horizontal
 
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
 
-        // Only handle touches starting from the left edge when drawer is closed
-        if (down.position.x > edgeWidth || drawerState.isOpen) return@awaitEachGesture
+                // Only handle touches starting from the left edge when drawer is closed
+                if (down.position.x > edgeWidth || drawerState.isOpen) return@awaitEachGesture
 
-        var totalX = 0f
-        var totalY = 0f
-        var decided = false
+                var totalX = 0f
+                var totalY = 0f
+                var decided = false
 
-        while (true) {
-            val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull() ?: break
-            if (!change.pressed) break
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull() ?: break
+                    if (!change.pressed) break
 
-            val delta = change.positionChange()
-            totalX += delta.x
-            totalY += delta.y
+                    val delta = change.positionChange()
+                    totalX += delta.x
+                    totalY += delta.y
 
-            if (!decided) {
-                val distance = sqrt(totalX * totalX + totalY * totalY)
-                if (distance > viewConfiguration.touchSlop) {
-                    val angle = atan2(
-                        abs(totalY).toDouble(),
-                        abs(totalX).toDouble()
-                    ) * 180.0 / PI
-                    if (totalX > 0 && angle < maxAngleDegrees) {
-                        decided = true
-                        // Fall through to consume this event
-                    } else {
-                        break // Not horizontal enough, let WebView handle it
+                    if (!decided) {
+                        val distance = sqrt(totalX * totalX + totalY * totalY)
+                        if (distance > viewConfiguration.touchSlop) {
+                            val angle =
+                                    atan2(abs(totalY).toDouble(), abs(totalX).toDouble()) * 180.0 /
+                                            PI
+                            if (totalX > 0 && angle < maxAngleDegrees) {
+                                decided = true
+                                // Fall through to consume this event
+                            } else {
+                                break // Not horizontal enough, let WebView handle it
+                            }
+                        } else {
+                            continue // Not enough movement yet
+                        }
                     }
-                } else {
-                    continue // Not enough movement yet
+
+                    // Horizontal edge swipe confirmed - consume events
+                    change.consume()
+                    if (totalX > swipeThreshold) {
+                        scope.launch { drawerState.open() }
+                        break
+                    }
                 }
             }
-
-            // Horizontal edge swipe confirmed - consume events
-            change.consume()
-            if (totalX > swipeThreshold) {
-                scope.launch { drawerState.open() }
-                break
-            }
         }
-    }
-}

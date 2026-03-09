@@ -14,12 +14,12 @@ import com.google.common.util.concurrent.ListenableFuture
 /**
  * A proxy player that mirrors the Sendspin web player's state via the JS bridge.
  *
- * This player does NOT play audio itself. It exposes playback state and metadata
- * from the WebView's web player to the Android MediaSession system, enabling
- * media controls in notifications, lock screen, Bluetooth, etc.
+ * This player does NOT play audio itself. It exposes playback state and metadata from the WebView's
+ * web player to the Android MediaSession system, enabling media controls in notifications, lock
+ * screen, Bluetooth, etc.
  *
- * Commands (play, pause, next, previous) are routed back to the web player
- * via the onCommandReceived callback.
+ * Commands (play, pause, next, previous) are routed back to the web player via the
+ * onCommandReceived callback.
  */
 class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
 
@@ -28,11 +28,22 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
     private var _artist: String = ""
     private var _album: String = ""
     private var _artwork: Bitmap? = null
+    private var _artworkBytes: ByteArray? = null
     private var _hasMedia: Boolean = false
     private var _durationMs: Long = 0L
     private var _positionMs: Long = 0L
     private var _positionTimestamp: Long = SystemClock.elapsedRealtime()
     private var _playbackSpeed: Float = 1.0f
+
+    /** Public accessors for notification metadata */
+    val title: String
+        get() = _title
+    val artist: String
+        get() = _artist
+    val album: String
+        get() = _album
+    val artwork: Bitmap?
+        get() = _artwork
 
     /** Callback to route commands back to the WebView's Sendspin player */
     var onCommandReceived: ((String) -> Unit)? = null
@@ -42,49 +53,51 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
 
     override fun getState(): State {
         // Calculate current position based on elapsed time since last JS update
-        val elapsedSinceUpdate = if (_isPlaying)
-            SystemClock.elapsedRealtime() - _positionTimestamp else 0L
+        val elapsedSinceUpdate =
+                if (_isPlaying) SystemClock.elapsedRealtime() - _positionTimestamp else 0L
         val calculatedPosition = _positionMs + (elapsedSinceUpdate * _playbackSpeed).toLong()
-        val position = if (_durationMs > 0)
-            calculatedPosition.coerceIn(0, _durationMs) else calculatedPosition.coerceAtLeast(0)
+        val position =
+                if (_durationMs > 0) calculatedPosition.coerceIn(0, _durationMs)
+                else calculatedPosition.coerceAtLeast(0)
 
-        val stateBuilder = State.Builder()
-            .setAvailableCommands(buildAvailableCommands())
-            .setPlayWhenReady(
-                _isPlaying,
-                PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST
-            )
-            .setPlaybackState(
-                if (_hasMedia) STATE_READY else STATE_IDLE
-            )
-            .setContentPositionMs(position)
-            .setPlaybackParameters(PlaybackParameters(_playbackSpeed))
+        val stateBuilder =
+                State.Builder()
+                        .setAvailableCommands(buildAvailableCommands())
+                        .setPlayWhenReady(_isPlaying, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+                        .setPlaybackState(if (_hasMedia) STATE_READY else STATE_IDLE)
+                        .setContentPositionMs(position)
+                        .setPlaybackParameters(PlaybackParameters(_playbackSpeed))
 
         if (_hasMedia) {
-            val metadata = MediaMetadata.Builder()
-                .setTitle(_title)
-                .setArtist(_artist)
-                .setAlbumTitle(_album)
+            val metadata =
+                    MediaMetadata.Builder()
+                            .setTitle(_title)
+                            .setArtist(_artist)
+                            .setAlbumTitle(_album)
 
-            _artwork?.let { bmp ->
-                metadata.setArtworkData(
-                    bitmapToByteArray(bmp),
-                    MediaMetadata.PICTURE_TYPE_FRONT_COVER
-                )
+            _artwork?.let {
+                _artworkBytes?.let { bytes ->
+                    metadata.setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                }
             }
 
-            val mediaItem = MediaItem.Builder()
-                .setMediaId("current")
-                .setMediaMetadata(metadata.build())
-                .build()
+            val mediaItem =
+                    MediaItem.Builder()
+                            .setMediaId("current")
+                            .setMediaMetadata(metadata.build())
+                            .build()
 
             stateBuilder
-                .setPlaylist(listOf(MediaItemData.Builder("current")
-                    .setMediaItem(mediaItem)
-                    .setMediaMetadata(metadata.build())
-                    .setDurationUs(_durationMs * 1000)
-                    .build()))
-                .setCurrentMediaItemIndex(0)
+                    .setPlaylist(
+                            listOf(
+                                    MediaItemData.Builder("current")
+                                            .setMediaItem(mediaItem)
+                                            .setMediaMetadata(metadata.build())
+                                            .setDurationUs(_durationMs * 1000)
+                                            .build()
+                            )
+                    )
+                    .setCurrentMediaItemIndex(0)
         }
 
         return stateBuilder.build()
@@ -92,17 +105,17 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
 
     private fun buildAvailableCommands(): Player.Commands {
         return Player.Commands.Builder()
-            .addAll(
-                Player.COMMAND_PLAY_PAUSE,
-                Player.COMMAND_STOP,
-                Player.COMMAND_SEEK_TO_NEXT,
-                Player.COMMAND_SEEK_TO_PREVIOUS,
-                Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
-                Player.COMMAND_GET_METADATA,
-                Player.COMMAND_GET_TIMELINE,
-                Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM
-            )
-            .build()
+                .addAll(
+                        Player.COMMAND_PLAY_PAUSE,
+                        Player.COMMAND_STOP,
+                        Player.COMMAND_SEEK_TO_NEXT,
+                        Player.COMMAND_SEEK_TO_PREVIOUS,
+                        Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+                        Player.COMMAND_GET_METADATA,
+                        Player.COMMAND_GET_TIMELINE,
+                        Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM
+                )
+                .build()
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
@@ -111,17 +124,15 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
     }
 
     override fun handleSeek(
-        mediaItemIndex: Int,
-        positionMs: Long,
-        seekCommand: Int
+            mediaItemIndex: Int,
+            positionMs: Long,
+            seekCommand: Int
     ): ListenableFuture<*> {
         when (seekCommand) {
-            Player.COMMAND_SEEK_TO_NEXT,
-            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+            Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
                 onCommandReceived?.invoke("nexttrack")
             }
-            Player.COMMAND_SEEK_TO_PREVIOUS,
-            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+            Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
                 onCommandReceived?.invoke("previoustrack")
             }
             Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM -> {
@@ -152,7 +163,10 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
         _title = title
         _artist = artist
         _album = album
-        _artwork = artwork
+        if (artwork !== _artwork) {
+            _artwork = artwork
+            _artworkBytes = artwork?.let { bitmapToByteArray(it) }
+        }
         _hasMedia = title.isNotEmpty() || artist.isNotEmpty()
         invalidateState()
     }
@@ -171,6 +185,7 @@ class MaProxyPlayer(looper: Looper) : SimpleBasePlayer(looper) {
         _artist = ""
         _album = ""
         _artwork = null
+        _artworkBytes = null
         _hasMedia = false
         _durationMs = 0L
         _positionMs = 0L
