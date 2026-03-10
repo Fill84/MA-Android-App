@@ -6,11 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Version bump type (leave empty for auto-detect)'
+        description: 'Version bump type'
         required: false
         type: choice
         options:
-          - ''
           - patch
           - minor
           - major
@@ -23,10 +22,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  # Job 1: Build and release when a tag is pushed (e.g. v3.0.0)
+  # No version bump — the tag IS the version.
+  release-from-tag:
+    name: Release from tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (tag: $TAG)"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease
+
+      - name: Rename APK
+        run: |
+          VERSION="${{ steps.version.outputs.version_name }}"
+          mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/Music_Assistant_${VERSION}.apk"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            app/build/outputs/apk/release/Music_Assistant_${{ steps.version.outputs.version_name }}.apk
+
+  # Job 2: Manual workflow dispatch — bump version, tag, build, release
+  release-manual:
     name: Version Bump & Release
-    if: >-
-      !contains(github.event.head_commit.message || '', 'chore: bump version')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
@@ -56,27 +102,17 @@ jobs:
         id: new_version
         run: |
           NEW_VERSION="${{ steps.tag_version.outputs.new_version }}"
-          PREVIOUS_TAG="${{ steps.tag_version.outputs.previous_tag }}"
-
-          # First release: no previous tag exists, start at v2.0.0
-          if [ -z "$PREVIOUS_TAG" ] || [ "$PREVIOUS_TAG" = "v0.0.0" ]; then
-            NEW_VERSION="2.0.0"
-          fi
-
           if [ -z "$NEW_VERSION" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No version bump needed"
-            exit 0
+            exit 1
           fi
           NEW_CODE=$(( ${{ steps.current.outputs.version_code }} + 1 ))
           echo "version_name=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "version_code=$NEW_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "New version: v$NEW_VERSION (versionCode: $NEW_CODE)"
 
       - name: Update build.gradle.kts
-        if: steps.new_version.outputs.skip != 'true'
         run: |
           sed -i "s/versionCode = [0-9]*/versionCode = ${{ steps.new_version.outputs.version_code }}/" app/build.gradle.kts
           sed -i "s/versionName = \".*\"/versionName = \"${{ steps.new_version.outputs.version_name }}\"/" app/build.gradle.kts
@@ -84,28 +120,23 @@ jobs:
           grep -E 'versionCode|versionName' app/build.gradle.kts
 
       - name: Set up JDK 17
-        if: steps.new_version.outputs.skip != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        if: steps.new_version.outputs.skip != 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build release APK
-        if: steps.new_version.outputs.skip != 'true'
         run: ./gradlew assembleRelease
 
       - name: Rename APK
-        if: steps.new_version.outputs.skip != 'true'
         run: |
           VERSION="${{ steps.new_version.outputs.version_name }}"
           mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/Music_Assistant_${VERSION}.apk"
 
       - name: Commit version bump
-        if: steps.new_version.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -114,7 +145,6 @@ jobs:
           git push
 
       - name: Create git tag
-        if: steps.new_version.outputs.skip != 'true'
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -122,7 +152,6 @@ jobs:
           tag_prefix: v
 
       - name: Create GitHub Release
-        if: steps.new_version.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.new_version.outputs.version_name }}
