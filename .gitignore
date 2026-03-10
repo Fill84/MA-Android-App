@@ -12,3 +12,4 @@ local.properties
 .vscode/*
 plan-*.md
 idea-*.md
+.claude/*
