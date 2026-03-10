@@ -4,11 +4,15 @@ The official Android companion app for [Music Assistant](https://music-assistant
 
 ## Features
 
-- **Native Android experience** — WebView-based UI with native navigation drawer
+- **Fully native UI** — Jetpack Compose with Material 3 theming, no WebView
+- **Direct audio streaming** — PCM audio via Sendspin protocol, played directly through Android AudioTrack for low-latency playback
 - **Media controls** — Lock screen, notification, and Bluetooth/headset controls via Media3 MediaSession
-- **Background playback** — Foreground service keeps audio playing when the app is in the background
-- **Server discovery** — Automatic mDNS/DNS-SD discovery of Music Assistant servers on your local network
-- **Material 3** — Modern Material You theming
+- **Background playback** — Foreground service with WakeLock keeps audio playing reliably in the background
+- **Multi-player support** — View and control any player on your MA server from the app
+- **Library browsing** — Browse artists, albums, tracks, playlists, and radio stations with pagination
+- **Search** — Search across your entire music library
+- **Queue management** — View, reorder, and manage the playback queue
+- **Real-time sync** — Event-driven WebSocket updates keep the app in sync with the server
 
 ## Requirements
 
@@ -44,33 +48,39 @@ The APK will be at `app/build/outputs/apk/debug/app-debug.apk` or `app/build/out
 | Layer | Technology |
 |-------|-----------|
 | UI | Jetpack Compose, Material 3 |
-| Navigation | Navigation Compose (3 routes: Launcher, Main, Settings) |
-| Media | Media3 1.5.1 (MediaSession + custom SimpleBasePlayer proxy) |
-| Background | Foreground Service with media playback type |
-| WebView | Singleton with MutableContextWrapper for lifecycle management |
+| Navigation | Navigation Compose with slide animations |
+| Media | Media3 (ExoPlayer + ForwardingPlayer + MediaSession) |
+| Audio Streaming | Direct AudioTrack via Sendspin protocol (PCM) |
+| Background | LifecycleService with foreground notification |
+| Networking | OkHttp WebSockets, kotlinx.serialization |
 | Settings | DataStore Preferences |
-| Networking | OkHttp, Coil |
+| Image Loading | Coil |
 
 ## Project structure
 
 ```
 app/src/main/java/io/musicassistant/companion/
 ├── data/
-│   ├── discovery/       # mDNS server discovery
+│   ├── api/             # WebSocket API client + typed API wrapper
+│   ├── model/           # Data models (Player, Queue, Media items)
+│   ├── sendspin/        # Sendspin protocol client (audio streaming)
 │   └── settings/        # DataStore preferences
 ├── media/
-│   ├── MaProxyPlayer    # Custom SimpleBasePlayer (mirrors web player state)
-│   ├── MediaSessionManager
-│   └── MediaBridgeScript # JS bridge for player state sync
+│   ├── NativeMediaManager   # ExoPlayer + ForwardingPlayer + MediaSession
+│   ├── StreamAudioPlayer    # Direct AudioTrack for PCM streaming
+│   └── AudioStreamPipe      # (legacy) Pipe-based streaming
 ├── service/
-│   └── PlayerService    # Foreground service + notification
+│   ├── MusicService     # Foreground service, notifications, metadata
+│   └── ServiceLocator   # Shared singletons (DI)
 └── ui/
-    ├── launcher/        # Server URL setup screen
-    ├── main/            # Main screen with navigation drawer
-    ├── settings/        # Settings screen
-    ├── webview/         # WebView holder, clients, composable
+    ├── common/          # Shared composables (MediaComponents, VisualEffects)
+    ├── home/            # Home screen (recently played, favorites)
+    ├── library/         # Library browsing + detail screens
     ├── navigation/      # App navigation graph
-    └── theme/           # Material 3 theming
+    ├── player/          # Now playing, mini player, queue
+    ├── search/          # Search screen
+    ├── settings/        # Settings screen
+    └── theme/           # Material 3 theming (colors, typography)
 ```
 
 ## Related projects

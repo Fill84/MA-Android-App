@@ -7,13 +7,10 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
-import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.session.MediaSession
 import io.musicassistant.companion.data.model.PlayerState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,11 +18,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Manages the native ExoPlayer instance and MediaSession.
+ * Manages audio playback and MediaSession.
  *
- * Unlike the old architecture, this directly plays audio through ExoPlayer and the MediaSession is
- * attached to the real player — providing automatic notification, lock screen, and Bluetooth
- * controls via Media3.
+ * Two playback modes:
+ * 1. URL playback: ExoPlayer plays a URL directly (play_url command)
+ * 2. Stream playback: AudioTrack plays PCM directly from WebSocket binary frames
+ *    (like v1's NativeAudioPlayer — no pipe, no ExoPlayer, no buffering)
+ *
+ * MediaSession is always attached to ForwardingPlayer for notification/lock screen controls.
+ * During streaming, ForwardingPlayer overrides report the correct state even though
+ * ExoPlayer itself is idle.
  */
 class NativeMediaManager(private val context: Context) {
 
@@ -50,9 +52,6 @@ class NativeMediaManager(private val context: Context) {
     private val _currentArtworkUri = MutableStateFlow<String?>(null)
     val currentArtworkUri: StateFlow<String?> = _currentArtworkUri.asStateFlow()
 
-    /** Callback when playback state changes (for PlayerService notification updates). */
-    var onPlaybackStateChanged: ((playing: Boolean) -> Unit)? = null
-
     /** Callbacks for media control actions (wired by MusicService to route through MA API). */
     var onPlayRequested: (() -> Unit)? = null
     var onPauseRequested: (() -> Unit)? = null
@@ -60,10 +59,11 @@ class NativeMediaManager(private val context: Context) {
     var onPreviousRequested: (() -> Unit)? = null
     var onSeekRequested: ((positionMs: Long) -> Unit)? = null
 
-    /** The current audio streaming pipe, if streaming is active. */
-    @Volatile
-    var currentStreamPipe: AudioStreamPipe? = null
-        private set
+    /** Direct AudioTrack player for Sendspin PCM streaming. */
+    private val streamPlayer = StreamAudioPlayer()
+
+    /** Whether streaming playback is logically "playing" (respects play/pause). */
+    @Volatile private var streamingPlaying = false
 
     /** Server-known duration for the current track (for seekbar in notification). */
     @Volatile private var knownDurationMs: Long = C.TIME_UNSET
@@ -83,9 +83,11 @@ class NativeMediaManager(private val context: Context) {
         if (exoPlayer != null) return
 
         val player =
-                ExoPlayer.Builder(context).setHandleAudioBecomingNoisy(true).build().also {
-                    it.addListener(PlayerListener())
-                }
+                ExoPlayer.Builder(context)
+                        .setHandleAudioBecomingNoisy(true)
+                        .build().also {
+                            it.addListener(PlayerListener())
+                        }
         exoPlayer = player
 
         forwardingPlayer = MaForwardingPlayer(player)
@@ -111,23 +113,18 @@ class NativeMediaManager(private val context: Context) {
     /**
      * Force the MediaSession to re-read player state (duration, position). Call this after updating
      * knownDuration or knownElapsedTime.
-     *
-     * MediaSession.setPlayer() with the same player reference is a no-op, so we use a temporary
-     * thin wrapper to force a full state re-read and broadcast to all connected controllers
-     * (including the system UI notification seekbar).
      */
     fun invalidateSessionState() {
         val fp = forwardingPlayer ?: return
         val session = mediaSession ?: return
-        // Temporary wrapper makes the session think it's a "new" player,
-        // so it re-reads all state (position, duration, seekable, etc.)
         val temp = object : ForwardingPlayer(fp) {}
         session.setPlayer(temp)
         session.setPlayer(fp)
         Log.d(
                 TAG,
                 "invalidateSessionState: duration=${knownDurationMs}ms, " +
-                        "elapsed=${knownElapsedMs}ms, serverPos=${serverPositionMs()}ms"
+                        "elapsed=${knownElapsedMs}ms, serverPos=${serverPositionMs()}ms, " +
+                        "streaming=${streamPlayer.isActive}"
         )
     }
 
@@ -143,9 +140,11 @@ class NativeMediaManager(private val context: Context) {
         }
     }
 
+    // ── URL Playback (ExoPlayer) ─────────────────────────────
+
     /** Play a stream URL received from the Sendspin server or MA API. */
     fun playUrl(url: String) {
-        stopStream() // close any active pipe stream
+        stopStream()
         val player = exoPlayer ?: return
         val mediaItem = MediaItem.fromUri(url)
         player.setMediaItem(mediaItem)
@@ -154,47 +153,48 @@ class NativeMediaManager(private val context: Context) {
         Log.d(TAG, "Playing URL: $url")
     }
 
+    // ── Direct PCM Streaming (AudioTrack) ────────────────────
+
     /**
-     * Start streaming playback from a Sendspin audio pipe. Creates an AudioStreamPipe and feeds it
-     * to ExoPlayer. Returns the pipe so the caller can write audio data into it.
+     * Start direct PCM streaming via AudioTrack.
+     * Called when Sendspin sends stream/start. Audio data is then written
+     * directly via [writeStreamData] from the WebSocket thread.
      */
-    fun playStream(
-            codec: String,
-            sampleRate: Int,
-            channels: Int,
-            bitDepth: Int,
-            codecHeader: ByteArray? = null
-    ): AudioStreamPipe {
+    fun startStreamDirect(sampleRate: Int, channels: Int, bitDepth: Int) {
         stopStream()
-        val pipe = AudioStreamPipe(codec, sampleRate, channels, bitDepth, codecHeader)
-        currentStreamPipe = pipe
+        exoPlayer?.stop()
 
-        val player = exoPlayer ?: return pipe
-        val dataSourceFactory = DataSource.Factory { InputStreamDataSource(pipe.inputStream) }
+        // Set a placeholder media item so MediaSession has something to attach metadata to
+        val placeholderItem = MediaItem.Builder().setUri(Uri.EMPTY).build()
+        exoPlayer?.setMediaItem(placeholderItem)
 
-        val mimeType =
-                when (codec) {
-                    "flac" -> MimeTypes.AUDIO_FLAC
-                    else -> MimeTypes.AUDIO_WAV // PCM wrapped in WAV header
-                }
-
-        val mediaItem = MediaItem.Builder().setUri(Uri.EMPTY).setMimeType(mimeType).build()
-
-        val mediaSource =
-                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
-
-        player.setMediaSource(mediaSource)
-        player.prepare()
-        player.play()
-        Log.d(TAG, "Started streaming: codec=$codec rate=$sampleRate ch=$channels bits=$bitDepth")
-        return pipe
+        streamPlayer.configure(sampleRate, channels, bitDepth)
+        streamingPlaying = true
+        _isPlaying.value = true
+        invalidateSessionState()
+        Log.d(TAG, "Started direct stream: rate=$sampleRate ch=$channels bits=$bitDepth")
     }
 
-    /** Stop the current pipe stream if active. */
+    /** Write audio data directly to AudioTrack. Called from WebSocket thread — zero copy. */
+    fun writeStreamData(data: ByteArray, offset: Int, length: Int) {
+        streamPlayer.write(data, offset, length)
+    }
+
+    /** Flush AudioTrack buffer (used on stream/clear for track transitions). */
+    fun flushStream() {
+        streamPlayer.flush()
+    }
+
+    /** Stop the current stream if active. */
     fun stopStream() {
-        currentStreamPipe?.close()
-        currentStreamPipe = null
+        if (streamPlayer.isActive) {
+            streamPlayer.stop()
+            streamingPlaying = false
+            _isPlaying.value = false
+        }
     }
+
+    // ── Common Controls ──────────────────────────────────────
 
     /** Update the current media metadata (for notification/lock screen display). */
     fun updateMetadata(title: String?, artist: String?, album: String?, artworkUrl: String?) {
@@ -219,11 +219,23 @@ class NativeMediaManager(private val context: Context) {
     }
 
     fun play() {
+        if (streamPlayer.isActive) {
+            streamingPlaying = true
+            _isPlaying.value = true
+            streamPlayer.resume() // resume AudioTrack immediately
+        }
         exoPlayer?.play()
     }
+
     fun pause() {
+        if (streamPlayer.isActive) {
+            streamingPlaying = false
+            _isPlaying.value = false
+            streamPlayer.pause() // instant silence — pause + flush
+        }
         exoPlayer?.pause()
     }
+
     fun stop() {
         stopStream()
         exoPlayer?.stop()
@@ -234,7 +246,9 @@ class NativeMediaManager(private val context: Context) {
     }
 
     fun setVolume(volume: Float) {
-        exoPlayer?.volume = volume.coerceIn(0f, 1f)
+        val v = volume.coerceIn(0f, 1f)
+        exoPlayer?.volume = v
+        streamPlayer.setVolume(v)
     }
 
     val currentPositionMs: Long
@@ -245,6 +259,8 @@ class NativeMediaManager(private val context: Context) {
         get() = if (knownDurationMs > 0) knownDurationMs else exoPlayer?.duration ?: 0L
     val playbackState: PlayerState
         get() {
+            if (streamingPlaying) return PlayerState.PLAYING
+            if (streamPlayer.isActive) return PlayerState.PAUSED
             val player = exoPlayer ?: return PlayerState.IDLE
             return when {
                 player.isPlaying -> PlayerState.PLAYING
@@ -258,22 +274,23 @@ class NativeMediaManager(private val context: Context) {
 
     fun release() {
         stopStream()
+        streamPlayer.release()
         mediaSession?.release()
         mediaSession = null
         forwardingPlayer = null
         exoPlayer?.release()
         exoPlayer = null
-        Log.d(TAG, "Released ExoPlayer and MediaSession")
+        Log.d(TAG, "Released ExoPlayer, StreamPlayer and MediaSession")
     }
 
     private inner class PlayerListener : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _isPlaying.value = isPlaying
-            onPlaybackStateChanged?.invoke(isPlaying)
+            // During streaming, don't let ExoPlayer state override our streaming state
+            _isPlaying.value = isPlaying || streamingPlaying
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            Log.d(TAG, "Playback state: $playbackState")
+            Log.d(TAG, "ExoPlayer state: $playbackState")
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -281,16 +298,14 @@ class NativeMediaManager(private val context: Context) {
         }
 
         override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
-            _currentTrackTitle.value = mediaMetadata.title?.toString()
-            _currentTrackArtist.value = mediaMetadata.artist?.toString()
-            _currentArtworkUri.value = mediaMetadata.artworkUri?.toString()
+            // No-op: metadata StateFlows are updated authoritatively by updateMetadata()
         }
     }
 
     /**
      * ForwardingPlayer that exposes next/prev/seek commands to the MediaSession, even when
-     * ExoPlayer only has a single streaming media item. Also overrides duration/seekable so the
-     * notification seekbar works with server-known duration.
+     * ExoPlayer only has a single streaming media item or is idle during AudioTrack streaming.
+     * Also overrides duration/seekable so the notification seekbar works with server-known duration.
      */
     private inner class MaForwardingPlayer(player: ExoPlayer) : ForwardingPlayer(player) {
 
@@ -318,6 +333,21 @@ class NativeMediaManager(private val context: Context) {
             }
         }
 
+        // ── Streaming state overrides ──
+        // During AudioTrack streaming, ExoPlayer is idle but MediaSession needs correct state.
+
+        override fun isPlaying(): Boolean {
+            return streamingPlaying || super.isPlaying()
+        }
+
+        override fun getPlaybackState(): Int {
+            return if (streamPlayer.isActive) Player.STATE_READY else super.getPlaybackState()
+        }
+
+        override fun getPlayWhenReady(): Boolean {
+            return if (streamPlayer.isActive) streamingPlaying else super.getPlayWhenReady()
+        }
+
         // ── Duration / Position overrides for notification seekbar ──
 
         override fun getDuration(): Long {
@@ -339,8 +369,6 @@ class NativeMediaManager(private val context: Context) {
         }
 
         override fun getBufferedPosition(): Long {
-            // Must be >= currentPosition, otherwise the system UI sees an inconsistent state.
-            // Report fully buffered so the seekbar shows properly.
             return if (knownDurationMs > 0) knownDurationMs else super.getBufferedPosition()
         }
 
@@ -362,7 +390,6 @@ class NativeMediaManager(private val context: Context) {
             return knownDurationMs > 0 || super.isCurrentMediaItemSeekable()
         }
 
-        // Tell the system this is NOT a live stream — it's a regular track with known duration.
         override fun isCurrentMediaItemLive(): Boolean {
             return if (knownDurationMs > 0) false else super.isCurrentMediaItemLive()
         }
@@ -382,11 +409,21 @@ class NativeMediaManager(private val context: Context) {
 
         override fun play() {
             super.play()
+            if (streamPlayer.isActive) {
+                streamingPlaying = true
+                _isPlaying.value = true
+                streamPlayer.resume()
+            }
             onPlayRequested?.invoke()
         }
 
         override fun pause() {
             super.pause()
+            if (streamPlayer.isActive) {
+                streamingPlaying = false
+                _isPlaying.value = false
+                streamPlayer.pause() // instant silence
+            }
             onPauseRequested?.invoke()
         }
 
@@ -425,8 +462,7 @@ class NativeMediaManager(private val context: Context) {
 
     /**
      * Timeline wrapper that overrides the window duration so the MediaSession (and therefore the
-     * system notification) sees the server-known track duration instead of ExoPlayer's unknown/live
-     * duration from a streaming pipe.
+     * system notification) sees the server-known track duration.
      */
     private class OverrideDurationTimeline(
             private val wrapped: Timeline,
@@ -440,10 +476,9 @@ class NativeMediaManager(private val context: Context) {
                 defaultPositionProjectionUs: Long
         ): Window {
             wrapped.getWindow(windowIndex, window, defaultPositionProjectionUs)
-            window.durationUs = C.msToUs(durationMs)
+            window.durationUs = durationMs * 1000L
             window.isSeekable = true
             window.isDynamic = false
-            // Clear live configuration so isLive returns false
             window.liveConfiguration = null
             return window
         }
@@ -452,7 +487,7 @@ class NativeMediaManager(private val context: Context) {
 
         override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
             wrapped.getPeriod(periodIndex, period, setIds)
-            period.durationUs = C.msToUs(durationMs)
+            period.durationUs = durationMs * 1000L
             return period
         }
 

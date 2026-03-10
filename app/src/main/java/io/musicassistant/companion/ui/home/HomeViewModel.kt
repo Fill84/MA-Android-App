@@ -8,7 +8,6 @@ import io.musicassistant.companion.data.model.Album
 import io.musicassistant.companion.data.model.Artist
 import io.musicassistant.companion.data.model.ConnectionState
 import io.musicassistant.companion.data.model.MediaItemImage
-import io.musicassistant.companion.data.model.Player
 import io.musicassistant.companion.data.model.Radio
 import io.musicassistant.companion.data.model.Track
 import io.musicassistant.companion.service.ServiceLocator
@@ -27,9 +26,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val api = ServiceLocator.api
     private val apiClient = ServiceLocator.apiClient
-
-    private val _players = MutableStateFlow<List<Player>>(emptyList())
-    val players: StateFlow<List<Player>> = _players.asStateFlow()
 
     private val _recentlyPlayed = MutableStateFlow<List<Track>>(emptyList())
     val recentlyPlayed: StateFlow<List<Track>> = _recentlyPlayed.asStateFlow()
@@ -68,19 +64,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .launchIn(viewModelScope)
 
-        // Refresh players when player_added/player_updated events fire
-        apiClient
-                .events
-                .onEach { event ->
-                    when (event.event) {
-                        "player_added", "player_updated", "player_removed" -> {
-                            try {
-                                _players.value = api.getPlayers()
-                            } catch (_: Exception) {}
-                        }
-                    }
-                }
-                .launchIn(viewModelScope)
     }
 
     fun loadHome() {
@@ -88,7 +71,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _isLoading.value = true
         viewModelScope.launch {
             try {
-                _players.value = api.getPlayers()
                 _recentlyPlayed.value =
                         api.getLibraryTracks(limit = 20, orderBy = "last_played desc")
                 _recentAlbums.value =

@@ -1,6 +1,9 @@
 package io.musicassistant.companion.ui.settings
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -20,6 +24,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,17 +43,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.musicassistant.companion.BuildConfig
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.data.settings.ThemeMode
 import io.musicassistant.companion.service.ServiceLocator
-import io.musicassistant.companion.ui.theme.MaAccentGreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -94,7 +100,6 @@ fun SettingsScreen(onBack: () -> Unit) {
 
                 // Login/Logout
                 if (currentSettings.authToken.isNotEmpty()) {
-                    // Logged in — show username and logout button
                     if (currentSettings.username.isNotEmpty()) {
                         InfoItem(title = "Logged in as", value = currentSettings.username)
                     } else {
@@ -105,7 +110,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                             onClick = {
                                 scope.launch {
                                     settingsRepository.logout()
-                                    // Reconnect without auth
                                     ServiceLocator.apiClient.disconnect()
                                     ServiceLocator.apiClient.connect(
                                             currentSettings.serverUrl,
@@ -115,7 +119,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                             }
                     ) { Text("Logout") }
                 } else {
-                    // Not logged in — show login fields
                     var loginUsername by remember { mutableStateOf(currentSettings.username) }
                     var loginPassword by remember { mutableStateOf("") }
                     var loginError by remember { mutableStateOf<String?>(null) }
@@ -173,7 +176,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                                                     token,
                                                     loginUsername.trim()
                                             )
-                                            // Reconnect with new token
                                             ServiceLocator.apiClient.disconnect()
                                             ServiceLocator.apiClient.connect(
                                                     currentSettings.serverUrl,
@@ -261,24 +263,42 @@ fun SettingsScreen(onBack: () -> Unit) {
 
 @Composable
 private fun SectionHeader(title: String) {
-    Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
-    )
+    Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+    ) {
+        Box(
+                modifier = Modifier
+                        .width(3.dp)
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+        )
+    }
 }
 
 @Composable
 private fun SettingsCard(content: @Composable () -> Unit) {
     Card(
             modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
             colors =
                     CardDefaults.cardColors(
-                            containerColor =
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    )
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+            border = BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) { Column(modifier = Modifier.padding(16.dp)) { content() } }
 }
 
@@ -329,7 +349,9 @@ private fun SwitchItem(
                 colors =
                         SwitchDefaults.colors(
                                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                                checkedTrackColor = MaAccentGreen
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
                         )
         )
     }
@@ -358,7 +380,7 @@ private fun ThemeDropdown(currentMode: ThemeMode, onModeSelected: (ThemeMode) ->
         }
         Spacer(modifier = Modifier.width(16.dp))
 
-        OutlinedButton(onClick = { expanded = true }) {
+        FilledTonalButton(onClick = { expanded = true }) {
             Text(
                     text =
                             when (currentMode) {

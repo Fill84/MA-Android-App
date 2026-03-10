@@ -1,6 +1,8 @@
 package io.musicassistant.companion.ui.navigation
 
 import android.content.Intent
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -10,8 +12,10 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -139,7 +144,10 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                         )
                     }
                     if (showBottomBar) {
-                        NavigationBar {
+                        NavigationBar(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                tonalElevation = 0.dp,
+                        ) {
                             bottomNavItems.forEach { item ->
                                 NavigationBarItem(
                                         selected = currentRoute == item.route,
@@ -155,7 +163,19 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                                             }
                                         },
                                         icon = { Icon(item.icon, contentDescription = item.label) },
-                                        label = { Text(item.label) }
+                                        label = {
+                                            Text(
+                                                    item.label,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                            )
+                                        },
+                                        colors = NavigationBarItemDefaults.colors(
+                                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        ),
                                 )
                             }
                         }
@@ -174,6 +194,10 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             },
                             onTrackClick = { track ->
                                 playerViewModel.playMedia(track.uri, MediaType.TRACK, "play")
+                            },
+                            onPlayerClick = { player ->
+                                playerViewModel.selectPlayer(player.playerId)
+                                innerNavController.navigate(Routes.NOW_PLAYING)
                             }
                     )
                 }
@@ -210,7 +234,21 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
 
                 composable(Routes.SETTINGS) { SettingsScreen(onBack = { onSwitchServer() }) }
 
-                composable(Routes.NOW_PLAYING) {
+                composable(
+                        Routes.NOW_PLAYING,
+                        enterTransition = {
+                            slideInVertically(initialOffsetY = { it })
+                        },
+                        exitTransition = {
+                            slideOutVertically(targetOffsetY = { it })
+                        },
+                        popEnterTransition = {
+                            slideInVertically(initialOffsetY = { -it })
+                        },
+                        popExitTransition = {
+                            slideOutVertically(targetOffsetY = { it })
+                        }
+                ) {
                     NowPlayingScreen(
                             playerViewModel = playerViewModel,
                             onBack = { innerNavController.popBackStack() },
@@ -218,7 +256,18 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                     )
                 }
 
-                composable(Routes.QUEUE) {
+                composable(
+                        Routes.QUEUE,
+                        enterTransition = {
+                            slideInVertically(initialOffsetY = { it })
+                        },
+                        exitTransition = {
+                            slideOutVertically(targetOffsetY = { it })
+                        },
+                        popExitTransition = {
+                            slideOutVertically(targetOffsetY = { it })
+                        }
+                ) {
                     QueueScreen(
                             playerViewModel = playerViewModel,
                             onBack = { innerNavController.popBackStack() }

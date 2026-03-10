@@ -5,6 +5,8 @@ import io.musicassistant.companion.data.api.MaApi
 import io.musicassistant.companion.data.api.MaApiClient
 import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.media.NativeMediaManager
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 
 /**
  * Simple service locator for application-scoped singletons. All components share the same API
@@ -12,7 +14,15 @@ import io.musicassistant.companion.media.NativeMediaManager
  */
 object ServiceLocator {
 
-    val apiClient: MaApiClient by lazy { MaApiClient() }
+    /** Shared OkHttpClient for all WebSocket connections. */
+    val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .pingInterval(30, TimeUnit.SECONDS)
+                .build()
+    }
+
+    val apiClient: MaApiClient by lazy { MaApiClient(httpClient) }
     val api: MaApi by lazy { MaApi(apiClient) }
 
     @Volatile
@@ -31,7 +41,7 @@ object ServiceLocator {
             // Recreate if player ID changed or first creation
             current?.destroy()
             val deviceName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"
-            SendspinClient(playerId = id, playerName = deviceName).also { sendspinClient = it }
+            SendspinClient(httpClient = httpClient, playerId = id, playerName = deviceName).also { sendspinClient = it }
         }
     }
 

@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 /**
  * ViewModel shared across all screens that need player state. Observes the MA API events to keep
@@ -38,6 +40,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val apiClient: MaApiClient = ServiceLocator.apiClient
     private val mediaManager: NativeMediaManager = ServiceLocator.getMediaManager(application)
     private val settingsRepo = SettingsModule.getRepository(application)
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        coerceInputValues = true
+    }
+
+    private fun tryParsePlayer(data: JsonElement?): Player? {
+        data ?: return null
+        return try { json.decodeFromJsonElement(Player.serializer(), data) }
+        catch (e: Exception) { Log.w(TAG, "Parse Player from event failed: ${e.message}"); null }
+    }
+
+    private fun tryParsePlayerQueue(data: JsonElement?): PlayerQueue? {
+        data ?: return null
+        return try { json.decodeFromJsonElement(PlayerQueue.serializer(), data) }
+        catch (e: Exception) { Log.w(TAG, "Parse PlayerQueue from event failed: ${e.message}"); null }
+    }
 
     // Current active player
     private val _activePlayer = MutableStateFlow<Player?>(null)
@@ -57,16 +77,53 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     // Derived state — isPlaying tracks the active remote player, not local ExoPlayer
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
-    val currentTrackTitle: StateFlow<String?> = mediaManager.currentTrackTitle
-    val currentTrackArtist: StateFlow<String?> = mediaManager.currentTrackArtist
-    val currentArtworkUri: StateFlow<String?> = mediaManager.currentArtworkUri
+    // Guard against event-driven flicker after user action (play/pause)
+    private var lastUserActionMs: Long = 0L
+    private val USER_ACTION_DEBOUNCE_MS = 1500L
+
+    /** Update isPlaying from server state, respecting debounce after user actions. */
+    private fun setIsPlayingFromServer(serverPlaying: Boolean) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val inDebounce = now - lastUserActionMs < USER_ACTION_DEBOUNCE_MS
+        // During debounce: only accept events that confirm the user action, not contradict it
+        if (!inDebounce || serverPlaying == _isPlaying.value) {
+            _isPlaying.value = serverPlaying
+        }
+    }
+
+    // UI metadata — tracks whichever player is selected (not necessarily this device)
+    private val _currentTrackTitle = MutableStateFlow<String?>(null)
+    val currentTrackTitle: StateFlow<String?> = _currentTrackTitle.asStateFlow()
+    private val _currentTrackArtist = MutableStateFlow<String?>(null)
+    val currentTrackArtist: StateFlow<String?> = _currentTrackArtist.asStateFlow()
+    private val _currentArtworkUri = MutableStateFlow<String?>(null)
+    val currentArtworkUri: StateFlow<String?> = _currentArtworkUri.asStateFlow()
+
+    // Duration/position — for selected player
+    private var _uiDurationMs: Long = 0L
+    private var _uiElapsedMs: Long = 0L
+    private var _uiElapsedAtMs: Long = 0L
+    private var _uiIsPlaying: Boolean = false
 
     val connectionState: StateFlow<ConnectionState> = apiClient.connectionState
 
     val currentPositionMs: Long
-        get() = mediaManager.currentPositionMs
+        get() {
+            if (_uiDurationMs <= 0) return mediaManager.currentPositionMs
+            val base = _uiElapsedMs
+            return if (_uiIsPlaying) {
+                val delta = android.os.SystemClock.elapsedRealtime() - _uiElapsedAtMs
+                (base + delta).coerceIn(0L, _uiDurationMs)
+            } else {
+                base.coerceAtLeast(0L)
+            }
+        }
     val durationMs: Long
-        get() = mediaManager.durationMs
+        get() = if (_uiDurationMs > 0) _uiDurationMs else mediaManager.durationMs
+
+    // Whether the current media item is a live stream (radio, etc.)
+    private val _isLive = MutableStateFlow(false)
+    val isLive: StateFlow<Boolean> = _isLive.asStateFlow()
 
     init {
         observeConnection()
@@ -119,6 +176,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 updateMetadataFromQueue()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load queue: ${e.message}")
+                // Queue doesn't exist for this player — clear metadata
+                _queue.value = null
+                _queueItems.value = emptyList()
+                updateMetadataFromQueue()
             }
         }
     }
@@ -137,29 +198,41 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun handlePlayerUpdated(event: MaApiClient.MaEvent) {
+        val changedId = event.objectId
+        val isAdded = event.event == "player_added"
         viewModelScope.launch {
             try {
-                val allPlayers = api.getPlayers()
-                _players.value = allPlayers
-
-                val settings = settingsRepo.settingsFlow.first()
-                val currentId = _activePlayer.value?.playerId
-
-                if (currentId != null) {
-                    // Update the already-selected player
-                    val updated = allPlayers.find { it.playerId == currentId }
-                    _activePlayer.value = updated
-                    _isPlaying.value = updated?.state == PlayerState.PLAYING
-                    // Re-evaluate metadata — current_media may have changed (e.g. radio track)
-                    updateMetadataFromQueue()
+                if (changedId != null && !isAdded) {
+                    // Use event data directly (avoids extra round-trip); fallback to fetch
+                    val updated = tryParsePlayer(event.data) ?: api.getPlayer(changedId)
+                    _players.value =
+                            _players.value.map { if (it.playerId == changedId) updated else it }
+                    if (_activePlayer.value?.playerId == changedId) {
+                        _activePlayer.value = updated
+                        // Don't update isPlaying here — queue_updated is authoritative for play state.
+                        // player_updated can have transitional states that cause flicker.
+                        updateMetadataFromQueue()
+                    }
                 } else {
-                    // No player selected yet — auto-select our own device if it just appeared
-                    val ourPlayer = allPlayers.find { it.playerId == settings.playerId }
-                    if (ourPlayer != null) {
-                        Log.d(TAG, "Auto-selecting own player: ${ourPlayer.playerId}")
-                        _activePlayer.value = ourPlayer
-                        _isPlaying.value = ourPlayer.state == PlayerState.PLAYING
-                        loadQueue(ourPlayer.playerId)
+                    // player_added or no objectId — full refresh to pick up new players
+                    val allPlayers = api.getPlayers()
+                    _players.value = allPlayers
+
+                    val currentId = _activePlayer.value?.playerId
+                    if (currentId != null) {
+                        val updated = allPlayers.find { it.playerId == currentId }
+                        _activePlayer.value = updated
+                        // isPlaying driven by queue_updated, not player_updated
+                    } else {
+                        // Auto-select our own device if it just appeared
+                        val settings = settingsRepo.settingsFlow.first()
+                        val ourPlayer = allPlayers.find { it.playerId == settings.playerId }
+                        if (ourPlayer != null) {
+                            Log.d(TAG, "Auto-selecting own player: ${ourPlayer.playerId}")
+                            _activePlayer.value = ourPlayer
+                            _isPlaying.value = ourPlayer.state == PlayerState.PLAYING
+                            loadQueue(ourPlayer.playerId)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -170,12 +243,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun handleQueueUpdated(event: MaApiClient.MaEvent) {
         val queueId = _activePlayer.value?.playerId ?: return
+        // Only process events for the active queue
+        if (event.objectId != null && event.objectId != queueId) return
         viewModelScope.launch {
             try {
-                val q = api.getPlayerQueue(queueId)
+                val prevItemId = _queue.value?.currentItem?.queueItemId
+                // Use event data directly (avoids extra round-trip); fallback to fetch
+                val q = tryParsePlayerQueue(event.data) ?: api.getPlayerQueue(queueId)
                 _queue.value = q
-                _isPlaying.value = q.state == PlayerState.PLAYING
-                updateMetadataFromQueue()
+                setIsPlayingFromServer(q.state == PlayerState.PLAYING)
+
+                if (q.currentItem?.queueItemId != prevItemId) {
+                    // Track changed — full UI metadata update
+                    updateMetadataFromQueue()
+                } else {
+                    // Same track — update elapsed time for UI seekbar
+                    updateElapsedTimeFromQueue()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to refresh queue: ${e.message}")
             }
@@ -193,64 +277,62 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Update UI metadata from queue for the selected player.
+     * Notification metadata is managed by MusicService (single source of truth for this device).
+     * This method handles UI display for ANY selected player.
+     */
     private fun updateMetadataFromQueue() {
-        val queue = _queue.value ?: return
-        val currentItem = queue.currentItem ?: return
-        val media = currentItem.mediaItem ?: return
+        val queue = _queue.value
+        val currentItem = queue?.currentItem
+        val media = currentItem?.mediaItem
+        if (queue == null || currentItem == null || media == null) {
+            // No active content — clear UI metadata
+            _currentTrackTitle.value = null
+            _currentTrackArtist.value = null
+            _currentArtworkUri.value = null
+            _uiDurationMs = 0L
+            _uiElapsedMs = 0L
+            _isLive.value = false
+            return
+        }
         val playerMedia = _activePlayer.value?.currentMedia
 
         val isRadio = media.mediaType == MediaType.RADIO
+        _isLive.value = isRadio || currentItem.duration <= 0
 
-        // For radio: prefer the player's current_media which has the actual track title/artist
-        val title: String
-        val artist: String
-        val album: String?
+        // Set UI metadata
         if (isRadio) {
             val pmTitle = playerMedia?.title?.takeIf { it.isNotBlank() }
             val pmArtist = playerMedia?.artist?.takeIf { it.isNotBlank() }
-            // player.current_media.title = track title, .artist = artist, .album = station
-            title = pmTitle ?: currentItem.name.ifBlank { media.name }
-            artist = pmArtist ?: media.name
-            album = playerMedia?.album ?: media.name
+            _currentTrackTitle.value = pmTitle ?: currentItem.name.ifBlank { media.name }
+            _currentTrackArtist.value = pmArtist ?: media.name
         } else {
-            title = media.name
-            artist = media.artists.joinToString(", ") { it.name }
-            album = media.album?.name
+            _currentTrackTitle.value = media.name
+            _currentTrackArtist.value = media.artists.joinToString(", ") { it.name }
         }
-
-        Log.d(TAG, "updateMetadata: isRadio=$isRadio title='$title' artist='$artist'")
 
         val artworkImage = media.image ?: currentItem.image
-        val artworkUrl =
-                if (artworkImage != null) {
-                    getImageUrl(artworkImage)
-                } else null
+        _currentArtworkUri.value = if (artworkImage != null) getImageUrl(artworkImage) else null
 
-        mediaManager.updateMetadata(
-                title = title,
-                artist = artist,
-                album = album,
-                artworkUrl = artworkUrl
-        )
+        // Duration/position for UI
+        _uiDurationMs = if (currentItem.duration > 0 && !_isLive.value) currentItem.duration * 1000L else 0L
+        updateElapsedTimeFromQueue()
+    }
 
-        // Provide the server-known duration so the notification seekbar works
-        if (currentItem.duration > 0) {
-            mediaManager.setKnownDuration(currentItem.duration * 1000L)
-        }
-
-        // Update elapsed time for the notification seekbar position
-        val elapsedMs = (queue.elapsedTime * 1000).toLong()
-        val playing = queue.state == PlayerState.PLAYING
-        mediaManager.setKnownElapsedTime(elapsedMs, playing)
-
-        // Force the MediaSession to re-read duration/position for the notification
-        mediaManager.invalidateSessionState()
+    /** Update elapsed time for UI seekbar. */
+    private fun updateElapsedTimeFromQueue() {
+        val queue = _queue.value ?: return
+        _uiElapsedMs = (queue.elapsedTime * 1000).toLong()
+        _uiElapsedAtMs = android.os.SystemClock.elapsedRealtime()
+        _uiIsPlaying = queue.state == PlayerState.PLAYING
     }
 
     // ── Player commands ─────────────────────────────────────
 
     fun play() {
         val playerId = _activePlayer.value?.playerId ?: return
+        lastUserActionMs = android.os.SystemClock.elapsedRealtime()
         _isPlaying.value = true
         mediaManager.play()
         viewModelScope.launch {
@@ -264,6 +346,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun pause() {
         val playerId = _activePlayer.value?.playerId ?: return
+        lastUserActionMs = android.os.SystemClock.elapsedRealtime()
         _isPlaying.value = false
         mediaManager.pause()
         viewModelScope.launch {
@@ -321,11 +404,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleShuffle() {
         val q = _queue.value ?: return
+        val newValue = !q.shuffleEnabled
+        _queue.value = q.copy(shuffleEnabled = newValue)
         viewModelScope.launch {
             try {
-                api.queueCommandShuffle(q.queueId, !q.shuffleEnabled)
+                api.queueCommandShuffle(q.queueId, newValue)
             } catch (e: Exception) {
                 Log.e(TAG, "Shuffle toggle failed: ${e.message}")
+                _queue.value = q // revert on failure
             }
         }
     }
@@ -338,11 +424,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     io.musicassistant.companion.data.model.RepeatMode.ONE -> "all"
                     io.musicassistant.companion.data.model.RepeatMode.ALL -> "off"
                 }
+        val nextRepeatMode =
+                when (nextMode) {
+                    "one" -> io.musicassistant.companion.data.model.RepeatMode.ONE
+                    "all" -> io.musicassistant.companion.data.model.RepeatMode.ALL
+                    else -> io.musicassistant.companion.data.model.RepeatMode.OFF
+                }
+        _queue.value = q.copy(repeatMode = nextRepeatMode)
         viewModelScope.launch {
             try {
                 api.queueCommandRepeat(q.queueId, nextMode)
             } catch (e: Exception) {
                 Log.e(TAG, "Repeat toggle failed: ${e.message}")
+                _queue.value = q // revert on failure
             }
         }
     }

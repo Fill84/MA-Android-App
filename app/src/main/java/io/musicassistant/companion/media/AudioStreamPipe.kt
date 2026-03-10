@@ -17,7 +17,7 @@ class AudioStreamPipe(
         channels: Int,
         bitDepth: Int,
         codecHeader: ByteArray? = null,
-        bufferSize: Int = 2 * 1024 * 1024 // 2MB pipe buffer
+        bufferSize: Int = 64 * 1024 // 64KB pipe buffer
 ) {
     private val pipeOut = PipedOutputStream()
     val inputStream = PipedInputStream(pipeOut, bufferSize)

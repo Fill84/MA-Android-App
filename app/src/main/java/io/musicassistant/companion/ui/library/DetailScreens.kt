@@ -27,12 +27,13 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -43,7 +44,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +54,11 @@ import coil.compose.AsyncImage
 import io.musicassistant.companion.data.model.Album
 import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Track
+import io.musicassistant.companion.ui.common.ImagePlaceholder
+import io.musicassistant.companion.ui.common.SectionTitle
+import io.musicassistant.companion.ui.common.ShimmerTrackRow
+import io.musicassistant.companion.ui.common.TrackRow
+import io.musicassistant.companion.ui.common.formatDuration
 import io.musicassistant.companion.ui.player.PlayerViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,114 +108,96 @@ fun ArtistDetailScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         contentPadding = PaddingValues(bottom = 16.dp)
                                 ) {
-                                        // Artist header
+                                        // Artist header with gradient backdrop
                                         item {
-                                                Column(
-                                                        modifier =
-                                                                Modifier.fillMaxWidth()
-                                                                        .padding(24.dp),
-                                                        horizontalAlignment =
-                                                                Alignment.CenterHorizontally
-                                                ) {
-                                                        val imageUrl =
-                                                                artist?.resolvedImage?.let {
-                                                                        libraryViewModel
-                                                                                .getImageUrl(it)
-                                                                }
+                                                Box(modifier = Modifier.fillMaxWidth()) {
                                                         Box(
-                                                                modifier =
-                                                                        Modifier.size(160.dp)
-                                                                                .clip(CircleShape)
-                                                                                .background(
-                                                                                        MaterialTheme
-                                                                                                .colorScheme
-                                                                                                .surfaceVariant
-                                                                                ),
-                                                                contentAlignment = Alignment.Center
-                                                        ) {
-                                                                if (imageUrl != null) {
-                                                                        AsyncImage(
-                                                                                model = imageUrl,
-                                                                                contentDescription =
-                                                                                        null,
-                                                                                modifier =
-                                                                                        Modifier.size(
-                                                                                                160.dp
-                                                                                        ),
-                                                                                contentScale =
-                                                                                        ContentScale
-                                                                                                .Crop
-                                                                        )
-                                                                } else {
-                                                                        Icon(
-                                                                                Icons.Default
-                                                                                        .Person,
-                                                                                contentDescription =
-                                                                                        null,
-                                                                                modifier =
-                                                                                        Modifier.size(
-                                                                                                64.dp
-                                                                                        ),
-                                                                                tint =
-                                                                                        MaterialTheme
-                                                                                                .colorScheme
-                                                                                                .onSurfaceVariant
-                                                                        )
-                                                                }
-                                                        }
-                                                        Spacer(modifier = Modifier.height(16.dp))
-                                                        Text(
-                                                                text = artist?.name ?: "",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .headlineSmall,
-                                                                fontWeight = FontWeight.Bold
-                                                        )
-                                                        Spacer(modifier = Modifier.height(12.dp))
-                                                        Button(
-                                                                onClick = {
-                                                                        artist?.uri?.let {
-                                                                                playerViewModel
-                                                                                        .playMedia(
-                                                                                                it,
-                                                                                                MediaType
-                                                                                                        .ARTIST,
-                                                                                                "play"
+                                                                modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .height(220.dp)
+                                                                        .background(
+                                                                                Brush.verticalGradient(
+                                                                                        listOf(
+                                                                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                                                                                MaterialTheme.colorScheme.background,
                                                                                         )
+                                                                                )
+                                                                        )
+                                                        )
+                                                        Column(
+                                                                modifier =
+                                                                        Modifier.fillMaxWidth()
+                                                                                .padding(24.dp),
+                                                                horizontalAlignment =
+                                                                        Alignment.CenterHorizontally
+                                                        ) {
+                                                                val imageUrl =
+                                                                        artist?.resolvedImage?.let {
+                                                                                libraryViewModel
+                                                                                        .getImageUrl(it)
+                                                                        }
+                                                                Box(
+                                                                        modifier =
+                                                                                Modifier.size(160.dp)
+                                                                                        .shadow(16.dp, CircleShape)
+                                                                                        .clip(CircleShape)
+                                                                                        .background(
+                                                                                                MaterialTheme
+                                                                                                        .colorScheme
+                                                                                                        .surfaceVariant
+                                                                                        ),
+                                                                        contentAlignment = Alignment.Center
+                                                                ) {
+                                                                        if (imageUrl != null) {
+                                                                                AsyncImage(
+                                                                                        model = imageUrl,
+                                                                                        contentDescription =
+                                                                                                null,
+                                                                                        modifier =
+                                                                                                Modifier.size(
+                                                                                                        160.dp
+                                                                                                ),
+                                                                                        contentScale =
+                                                                                                ContentScale
+                                                                                                        .Crop
+                                                                                )
+                                                                        } else {
+                                                                                ImagePlaceholder(
+                                                                                        icon = Icons.Default.Person,
+                                                                                        size = 160.dp,
+                                                                                        shape = CircleShape,
+                                                                                )
                                                                         }
                                                                 }
-                                                        ) {
-                                                                Icon(
-                                                                        Icons.Default.PlayArrow,
-                                                                        contentDescription = null,
-                                                                        modifier =
-                                                                                Modifier.size(18.dp)
+                                                                Spacer(modifier = Modifier.height(16.dp))
+                                                                Text(
+                                                                        text = artist?.name ?: "",
+                                                                        style =
+                                                                                MaterialTheme.typography
+                                                                                        .headlineSmall,
+                                                                        fontWeight = FontWeight.Bold
                                                                 )
-                                                                Spacer(
-                                                                        modifier =
-                                                                                Modifier.width(4.dp)
+                                                                Spacer(modifier = Modifier.height(12.dp))
+                                                                PlayAllButton(
+                                                                        text = "Play All",
+                                                                        onClick = {
+                                                                                artist?.uri?.let {
+                                                                                        playerViewModel
+                                                                                                .playMedia(
+                                                                                                        it,
+                                                                                                        MediaType.ARTIST,
+                                                                                                        "play"
+                                                                                                )
+                                                                                }
+                                                                        }
                                                                 )
-                                                                Text("Play All")
                                                         }
                                                 }
                                         }
 
                                         // Albums section
                                         if (albums.isNotEmpty()) {
-                                                item {
-                                                        Text(
-                                                                text = "Albums",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .titleMedium,
-                                                                fontWeight = FontWeight.Bold,
-                                                                modifier =
-                                                                        Modifier.padding(
-                                                                                horizontal = 16.dp,
-                                                                                vertical = 8.dp
-                                                                        )
-                                                        )
-                                                }
+                                                item { SectionTitle("Albums") }
                                                 item {
                                                         LazyRow(
                                                                 contentPadding =
@@ -245,22 +234,7 @@ fun ArtistDetailScreen(
 
                                         // Top tracks section
                                         if (tracks.isNotEmpty()) {
-                                                item {
-                                                        Text(
-                                                                text = "Top Tracks",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .titleMedium,
-                                                                fontWeight = FontWeight.Bold,
-                                                                modifier =
-                                                                        Modifier.padding(
-                                                                                start = 16.dp,
-                                                                                end = 16.dp,
-                                                                                top = 16.dp,
-                                                                                bottom = 8.dp
-                                                                        )
-                                                        )
-                                                }
+                                                item { SectionTitle("Top Tracks") }
                                                 items(tracks.take(10), key = { it.itemId }) { track
                                                         ->
                                                         TrackRow(
@@ -340,123 +314,119 @@ fun AlbumDetailScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         contentPadding = PaddingValues(bottom = 16.dp)
                                 ) {
-                                        // Album header
+                                        // Album header with gradient
                                         item {
-                                                Column(
-                                                        modifier =
-                                                                Modifier.fillMaxWidth()
-                                                                        .padding(24.dp),
-                                                        horizontalAlignment =
-                                                                Alignment.CenterHorizontally
-                                                ) {
-                                                        val imageUrl =
-                                                                album?.resolvedImage?.let {
-                                                                        libraryViewModel
-                                                                                .getImageUrl(it)
-                                                                }
+                                                Box(modifier = Modifier.fillMaxWidth()) {
                                                         Box(
-                                                                modifier =
-                                                                        Modifier.size(200.dp)
-                                                                                .clip(
-                                                                                        RoundedCornerShape(
-                                                                                                16.dp
+                                                                modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .height(260.dp)
+                                                                        .background(
+                                                                                Brush.verticalGradient(
+                                                                                        listOf(
+                                                                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                                                                                MaterialTheme.colorScheme.background,
                                                                                         )
                                                                                 )
-                                                                                .background(
-                                                                                        MaterialTheme
-                                                                                                .colorScheme
-                                                                                                .surfaceVariant
-                                                                                ),
-                                                                contentAlignment = Alignment.Center
-                                                        ) {
-                                                                if (imageUrl != null) {
-                                                                        AsyncImage(
-                                                                                model = imageUrl,
-                                                                                contentDescription =
-                                                                                        null,
-                                                                                modifier =
-                                                                                        Modifier.fillMaxSize(),
-                                                                                contentScale =
-                                                                                        ContentScale
-                                                                                                .Crop
                                                                         )
-                                                                } else {
-                                                                        Icon(
-                                                                                Icons.Default.Album,
-                                                                                contentDescription =
-                                                                                        null,
-                                                                                modifier =
-                                                                                        Modifier.size(
-                                                                                                64.dp
+                                                        )
+                                                        Column(
+                                                                modifier =
+                                                                        Modifier.fillMaxWidth()
+                                                                                .padding(24.dp),
+                                                                horizontalAlignment =
+                                                                        Alignment.CenterHorizontally
+                                                        ) {
+                                                                val imageUrl =
+                                                                        album?.resolvedImage?.let {
+                                                                                libraryViewModel
+                                                                                        .getImageUrl(it)
+                                                                        }
+                                                                Box(
+                                                                        modifier =
+                                                                                Modifier.size(200.dp)
+                                                                                        .shadow(16.dp, RoundedCornerShape(16.dp))
+                                                                                        .clip(
+                                                                                                RoundedCornerShape(
+                                                                                                        16.dp
+                                                                                                )
+                                                                                        )
+                                                                                        .background(
+                                                                                                MaterialTheme
+                                                                                                        .colorScheme
+                                                                                                        .surfaceVariant
                                                                                         ),
-                                                                                tint =
+                                                                        contentAlignment = Alignment.Center
+                                                                ) {
+                                                                        if (imageUrl != null) {
+                                                                                AsyncImage(
+                                                                                        model = imageUrl,
+                                                                                        contentDescription =
+                                                                                                null,
+                                                                                        modifier =
+                                                                                                Modifier.fillMaxSize(),
+                                                                                        contentScale =
+                                                                                                ContentScale
+                                                                                                        .Crop
+                                                                                )
+                                                                        } else {
+                                                                                ImagePlaceholder(
+                                                                                        icon = Icons.Default.Album,
+                                                                                        size = 200.dp,
+                                                                                        shape = RoundedCornerShape(16.dp),
+                                                                                )
+                                                                        }
+                                                                }
+                                                                Spacer(modifier = Modifier.height(16.dp))
+                                                                Text(
+                                                                        text = album?.name ?: "",
+                                                                        style =
+                                                                                MaterialTheme.typography
+                                                                                        .headlineSmall,
+                                                                        fontWeight = FontWeight.Bold
+                                                                )
+                                                                val artistName =
+                                                                        album?.artists?.firstOrNull()?.name
+                                                                if (artistName != null) {
+                                                                        Text(
+                                                                                text = artistName,
+                                                                                style =
+                                                                                        MaterialTheme
+                                                                                                .typography
+                                                                                                .bodyLarge,
+                                                                                color =
                                                                                         MaterialTheme
                                                                                                 .colorScheme
                                                                                                 .onSurfaceVariant
                                                                         )
                                                                 }
-                                                        }
-                                                        Spacer(modifier = Modifier.height(16.dp))
-                                                        Text(
-                                                                text = album?.name ?: "",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .headlineSmall,
-                                                                fontWeight = FontWeight.Bold
-                                                        )
-                                                        val artistName =
-                                                                album?.artists?.firstOrNull()?.name
-                                                        if (artistName != null) {
-                                                                Text(
-                                                                        text = artistName,
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyLarge,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                        }
-                                                        album?.year?.let { year ->
-                                                                Text(
-                                                                        text = year.toString(),
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodySmall,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                        }
-                                                        Spacer(modifier = Modifier.height(12.dp))
-                                                        Button(
-                                                                onClick = {
-                                                                        album?.uri?.let {
-                                                                                playerViewModel
-                                                                                        .playMedia(
-                                                                                                it,
-                                                                                                MediaType
-                                                                                                        .ALBUM,
-                                                                                                "play"
-                                                                                        )
-                                                                        }
+                                                                album?.year?.let { year ->
+                                                                        Text(
+                                                                                text = year.toString(),
+                                                                                style =
+                                                                                        MaterialTheme
+                                                                                                .typography
+                                                                                                .bodySmall,
+                                                                                color =
+                                                                                        MaterialTheme
+                                                                                                .colorScheme
+                                                                                                .onSurfaceVariant
+                                                                        )
                                                                 }
-                                                        ) {
-                                                                Icon(
-                                                                        Icons.Default.PlayArrow,
-                                                                        contentDescription = null,
-                                                                        modifier =
-                                                                                Modifier.size(18.dp)
+                                                                Spacer(modifier = Modifier.height(12.dp))
+                                                                PlayAllButton(
+                                                                        text = "Play Album",
+                                                                        onClick = {
+                                                                                album?.uri?.let {
+                                                                                        playerViewModel
+                                                                                                .playMedia(
+                                                                                                        it,
+                                                                                                        MediaType.ALBUM,
+                                                                                                        "play"
+                                                                                                )
+                                                                                }
+                                                                        }
                                                                 )
-                                                                Spacer(
-                                                                        modifier =
-                                                                                Modifier.width(4.dp)
-                                                                )
-                                                                Text("Play Album")
                                                         }
                                                 }
                                         }
@@ -538,120 +508,115 @@ fun PlaylistDetailScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         contentPadding = PaddingValues(bottom = 16.dp)
                                 ) {
-                                        // Playlist header
+                                        // Playlist header with gradient
                                         item {
-                                                Column(
-                                                        modifier =
-                                                                Modifier.fillMaxWidth()
-                                                                        .padding(24.dp),
-                                                        horizontalAlignment =
-                                                                Alignment.CenterHorizontally
-                                                ) {
-                                                        val imageUrl =
-                                                                playlist?.resolvedImage?.let {
-                                                                        libraryViewModel
-                                                                                .getImageUrl(it)
-                                                                }
+                                                Box(modifier = Modifier.fillMaxWidth()) {
                                                         Box(
-                                                                modifier =
-                                                                        Modifier.size(180.dp)
-                                                                                .clip(
-                                                                                        RoundedCornerShape(
-                                                                                                16.dp
+                                                                modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .height(240.dp)
+                                                                        .background(
+                                                                                Brush.verticalGradient(
+                                                                                        listOf(
+                                                                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                                                                                MaterialTheme.colorScheme.background,
                                                                                         )
                                                                                 )
-                                                                                .background(
-                                                                                        MaterialTheme
-                                                                                                .colorScheme
-                                                                                                .surfaceVariant
-                                                                                ),
-                                                                contentAlignment = Alignment.Center
-                                                        ) {
-                                                                if (imageUrl != null) {
-                                                                        AsyncImage(
-                                                                                model = imageUrl,
-                                                                                contentDescription =
-                                                                                        null,
-                                                                                modifier =
-                                                                                        Modifier.fillMaxSize(),
-                                                                                contentScale =
-                                                                                        ContentScale
-                                                                                                .Crop
                                                                         )
-                                                                } else {
-                                                                        Icon(
-                                                                                Icons.Default
-                                                                                        .MusicNote,
-                                                                                contentDescription =
-                                                                                        null,
-                                                                                modifier =
-                                                                                        Modifier.size(
-                                                                                                64.dp
+                                                        )
+                                                        Column(
+                                                                modifier =
+                                                                        Modifier.fillMaxWidth()
+                                                                                .padding(24.dp),
+                                                                horizontalAlignment =
+                                                                        Alignment.CenterHorizontally
+                                                        ) {
+                                                                val imageUrl =
+                                                                        playlist?.resolvedImage?.let {
+                                                                                libraryViewModel
+                                                                                        .getImageUrl(it)
+                                                                        }
+                                                                Box(
+                                                                        modifier =
+                                                                                Modifier.size(180.dp)
+                                                                                        .shadow(16.dp, RoundedCornerShape(16.dp))
+                                                                                        .clip(
+                                                                                                RoundedCornerShape(
+                                                                                                        16.dp
+                                                                                                )
+                                                                                        )
+                                                                                        .background(
+                                                                                                MaterialTheme
+                                                                                                        .colorScheme
+                                                                                                        .surfaceVariant
                                                                                         ),
-                                                                                tint =
+                                                                        contentAlignment = Alignment.Center
+                                                                ) {
+                                                                        if (imageUrl != null) {
+                                                                                AsyncImage(
+                                                                                        model = imageUrl,
+                                                                                        contentDescription =
+                                                                                                null,
+                                                                                        modifier =
+                                                                                                Modifier.fillMaxSize(),
+                                                                                        contentScale =
+                                                                                                ContentScale
+                                                                                                        .Crop
+                                                                                )
+                                                                        } else {
+                                                                                ImagePlaceholder(
+                                                                                        icon = Icons.Default.MusicNote,
+                                                                                        size = 180.dp,
+                                                                                        shape = RoundedCornerShape(16.dp),
+                                                                                )
+                                                                        }
+                                                                }
+                                                                Spacer(modifier = Modifier.height(16.dp))
+                                                                Text(
+                                                                        text = playlist?.name ?: "",
+                                                                        style =
+                                                                                MaterialTheme.typography
+                                                                                        .headlineSmall,
+                                                                        fontWeight = FontWeight.Bold
+                                                                )
+                                                                if (playlist?.owner?.isNotEmpty() == true) {
+                                                                        Text(
+                                                                                text =
+                                                                                        "by ${playlist?.owner}",
+                                                                                style =
+                                                                                        MaterialTheme
+                                                                                                .typography
+                                                                                                .bodyLarge,
+                                                                                color =
                                                                                         MaterialTheme
                                                                                                 .colorScheme
                                                                                                 .onSurfaceVariant
                                                                         )
                                                                 }
-                                                        }
-                                                        Spacer(modifier = Modifier.height(16.dp))
-                                                        Text(
-                                                                text = playlist?.name ?: "",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .headlineSmall,
-                                                                fontWeight = FontWeight.Bold
-                                                        )
-                                                        if (playlist?.owner?.isNotEmpty() == true) {
+                                                                Spacer(modifier = Modifier.height(8.dp))
                                                                 Text(
-                                                                        text =
-                                                                                "by ${playlist?.owner}",
+                                                                        text = "${tracks.size} tracks",
                                                                         style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyLarge,
+                                                                                MaterialTheme.typography
+                                                                                        .bodySmall,
                                                                         color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
+                                                                                MaterialTheme.colorScheme
                                                                                         .onSurfaceVariant
                                                                 )
-                                                        }
-                                                        Spacer(modifier = Modifier.height(8.dp))
-                                                        Text(
-                                                                text = "${tracks.size} tracks",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodySmall,
-                                                                color =
-                                                                        MaterialTheme.colorScheme
-                                                                                .onSurfaceVariant
-                                                        )
-                                                        Spacer(modifier = Modifier.height(12.dp))
-                                                        Button(
-                                                                onClick = {
-                                                                        playlist?.uri?.let {
-                                                                                playerViewModel
-                                                                                        .playMedia(
-                                                                                                it,
-                                                                                                MediaType
-                                                                                                        .PLAYLIST,
-                                                                                                "play"
-                                                                                        )
+                                                                Spacer(modifier = Modifier.height(12.dp))
+                                                                PlayAllButton(
+                                                                        text = "Play All",
+                                                                        onClick = {
+                                                                                playlist?.uri?.let {
+                                                                                        playerViewModel
+                                                                                                .playMedia(
+                                                                                                        it,
+                                                                                                        MediaType.PLAYLIST,
+                                                                                                        "play"
+                                                                                                )
+                                                                                }
                                                                         }
-                                                                }
-                                                        ) {
-                                                                Icon(
-                                                                        Icons.Default.PlayArrow,
-                                                                        contentDescription = null,
-                                                                        modifier =
-                                                                                Modifier.size(18.dp)
                                                                 )
-                                                                Spacer(
-                                                                        modifier =
-                                                                                Modifier.width(4.dp)
-                                                                )
-                                                                Text("Play All")
                                                         }
                                                 }
                                         }
@@ -685,31 +650,53 @@ fun PlaylistDetailScreen(
 // ── Shared composables ──────────────────────────────────────
 
 @Composable
+private fun PlayAllButton(text: String, onClick: () -> Unit) {
+        Button(
+                onClick = onClick,
+                shape = RoundedCornerShape(24.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
+                elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 4.dp,
+                        pressedElevation = 8.dp,
+                ),
+        ) {
+                Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(text)
+        }
+}
+
+@Composable
 private fun AlbumCard(album: Album, imageUrl: String?, onClick: () -> Unit) {
-        Column(modifier = Modifier.width(130.dp).clickable(onClick = onClick)) {
-                Box(
-                        modifier =
-                                Modifier.size(130.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
+        Column(modifier = Modifier.width(130.dp).clickable(onClick = onClick).padding(4.dp)) {
+                Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        tonalElevation = 1.dp,
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.size(122.dp),
                 ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.Album,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(40.dp)
-                                )
+                        Box(contentAlignment = Alignment.Center) {
+                                if (imageUrl != null) {
+                                        AsyncImage(
+                                                model = imageUrl,
+                                                contentDescription = null,
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Crop
+                                        )
+                                } else {
+                                        ImagePlaceholder(
+                                                icon = Icons.Default.Album,
+                                                size = 122.dp,
+                                                shape = RoundedCornerShape(14.dp),
+                                        )
+                                }
                         }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                         text = album.name,
                         style = MaterialTheme.typography.bodySmall,
@@ -798,73 +785,12 @@ private fun AlbumTrackRow(
 }
 
 @Composable
-private fun TrackRow(track: Track, imageUrl: String?, onClick: () -> Unit) {
-        Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-        ) {
-                Box(
-                        modifier =
-                                Modifier.size(44.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(44.dp),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.MusicNote,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                )
-                        }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                                text = track.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                        )
-                        val artistName = track.artists.firstOrNull()?.name
-                        if (artistName != null) {
-                                Text(
-                                        text = artistName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                )
-                        }
-                }
-                Text(
-                        text = formatDuration(track.duration),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-        }
-}
-
-private fun formatDuration(seconds: Int): String {
-        val m = seconds / 60
-        val s = seconds % 60
-        return "%d:%02d".format(m, s)
-}
-
-@Composable
 private fun LoadingOverlay() {
-        Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-        ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
+        Column(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+        ) {
+                repeat(5) {
+                        ShimmerTrackRow()
+                }
+        }
 }

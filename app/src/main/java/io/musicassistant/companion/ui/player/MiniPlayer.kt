@@ -1,8 +1,8 @@
 package io.musicassistant.companion.ui.player
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,8 +19,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,11 +32,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import io.musicassistant.companion.ui.common.ImagePlaceholder
 import kotlinx.coroutines.delay
 
 /**
@@ -53,6 +55,7 @@ fun MiniPlayer(
     val title by playerViewModel.currentTrackTitle.collectAsState()
     val artist by playerViewModel.currentTrackArtist.collectAsState()
     val artworkUri by playerViewModel.currentArtworkUri.collectAsState()
+    val isLive by playerViewModel.isLive.collectAsState()
 
     // Only show if there's a track
     if (title == null) return
@@ -68,89 +71,97 @@ fun MiniPlayer(
         }
     }
 
-    val progress = if (durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
+    val progress = if (!isLive && durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
 
-    Column(
-            modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+    Surface(
+            modifier = modifier.fillMaxWidth(),
+            tonalElevation = 3.dp,
+            shadowElevation = 8.dp,
+            color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
-        // Progress bar
-        LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-        )
+        Column {
+            // Gradient progress bar
+            val primaryColor = MaterialTheme.colorScheme.primary
+            val trackColor = MaterialTheme.colorScheme.surfaceVariant
+            Canvas(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+                drawRect(color = trackColor)
+                drawRect(
+                        color = primaryColor,
+                        size = Size(size.width * progress, size.height),
+                )
+            }
 
-        Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Thumbnail
-            Box(
+            Row(
                     modifier =
-                            Modifier.size(40.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(MaterialTheme.colorScheme.surface),
-                    contentAlignment = Alignment.Center
+                            Modifier.fillMaxWidth()
+                                    .clickable(onClick = onClick)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
             ) {
+                // Thumbnail
+                val thumbnailShape = RoundedCornerShape(8.dp)
+                val outlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                 if (artworkUri != null) {
                     AsyncImage(
                             model = artworkUri,
                             contentDescription = null,
-                            modifier = Modifier.size(40.dp),
+                            modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(thumbnailShape)
+                                    .border(1.dp, outlineColor, thumbnailShape),
                             contentScale = ContentScale.Crop
                     )
                 } else {
-                    Icon(
-                            Icons.Default.MusicNote,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    ImagePlaceholder(
+                            icon = Icons.Default.MusicNote,
+                            size = 44.dp,
+                            shape = thumbnailShape,
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                        text = title ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                )
-                if (!artist.isNullOrEmpty()) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                            text = artist ?: "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = title ?: "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                     )
+                    if (!artist.isNullOrEmpty()) {
+                        Text(
+                                text = artist ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-            }
 
-            IconButton(
-                    onClick = { if (isPlaying) playerViewModel.pause() else playerViewModel.play() }
-            ) {
-                Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = MaterialTheme.colorScheme.onSurface
-                )
-            }
+                IconButton(
+                        onClick = { if (isPlaying) playerViewModel.pause() else playerViewModel.play() },
+                        modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
 
-            IconButton(onClick = { playerViewModel.next() }) {
-                Icon(
-                        Icons.Default.SkipNext,
-                        contentDescription = "Next",
-                        tint = MaterialTheme.colorScheme.onSurface
-                )
+                IconButton(
+                        onClick = { playerViewModel.next() },
+                        modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "Next",
+                            tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }

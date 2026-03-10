@@ -1,7 +1,6 @@
 package io.musicassistant.companion.data.sendspin
 
 import android.util.Log
-import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +35,7 @@ import okio.ByteString
  * stream signaling and commands from the server.
  */
 class SendspinClient(
+        private val httpClient: OkHttpClient,
         val playerId: String,
         private val playerName: String = "Music Assistant Companion"
 ) {
@@ -69,12 +69,6 @@ class SendspinClient(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-    private val httpClient =
-            OkHttpClient.Builder()
-                    .readTimeout(0, TimeUnit.MILLISECONDS)
-                    .pingInterval(30, TimeUnit.SECONDS)
-                    .build()
 
     private var webSocket: WebSocket? = null
     private var serverUrl: String = ""
@@ -175,7 +169,7 @@ class SendspinClient(
                     putJsonArray("supported_formats") {
                         add(
                                 buildJsonObject {
-                                    put("codec", "flac")
+                                    put("codec", "pcm")
                                     put("channels", 2)
                                     put("sample_rate", 48000)
                                     put("bit_depth", 16)
@@ -185,12 +179,12 @@ class SendspinClient(
                                 buildJsonObject {
                                     put("codec", "pcm")
                                     put("channels", 2)
-                                    put("sample_rate", 48000)
+                                    put("sample_rate", 44100)
                                     put("bit_depth", 16)
                                 }
                         )
                     }
-                    put("buffer_capacity", 100000)
+                    put("buffer_capacity", 480000)
                     putJsonArray("supported_commands") {
                         add(kotlinx.serialization.json.JsonPrimitive("volume"))
                         add(kotlinx.serialization.json.JsonPrimitive("mute"))
@@ -336,7 +330,6 @@ class SendspinClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            Log.d(TAG, "Raw Sendspin message: $text")
             handleMessage(text)
         }
 

@@ -1,6 +1,7 @@
 package io.musicassistant.companion.ui.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,13 +57,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import io.musicassistant.companion.data.model.RepeatMode
+import io.musicassistant.companion.ui.common.ImagePlaceholder
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,6 +81,7 @@ fun NowPlayingScreen(
         val title by playerViewModel.currentTrackTitle.collectAsState()
         val artist by playerViewModel.currentTrackArtist.collectAsState()
         val artworkUri by playerViewModel.currentArtworkUri.collectAsState()
+        val isLive by playerViewModel.isLive.collectAsState()
         val queue by playerViewModel.queue.collectAsState()
         val player by playerViewModel.activePlayer.collectAsState()
         val allPlayers by playerViewModel.players.collectAsState()
@@ -97,246 +103,306 @@ fun NowPlayingScreen(
                 }
         }
 
-        Column(
-                modifier =
-                        Modifier.fillMaxSize()
-                                .background(MaterialTheme.colorScheme.background)
-                                .verticalScroll(rememberScrollState())
-                                .padding(horizontal = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-                // Top bar
-                Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                ) {
-                        IconButton(onClick = onBack) {
-                                Icon(
-                                        Icons.Default.KeyboardArrowDown,
-                                        contentDescription = "Minimize",
-                                        tint = MaterialTheme.colorScheme.onBackground
-                                )
-                        }
-                        Text(
-                                text = "Now Playing",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onBackground
-                        )
-                        IconButton(onClick = onOpenQueue) {
-                                Icon(
-                                        Icons.AutoMirrored.Filled.QueueMusic,
-                                        contentDescription = "Queue",
-                                        tint = MaterialTheme.colorScheme.onBackground
-                                )
-                        }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Album art
+        Box(modifier = Modifier.fillMaxSize()) {
+                // Gradient background
                 Box(
+                        modifier = Modifier.fillMaxSize().background(
+                                Brush.verticalGradient(
+                                        listOf(
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                                MaterialTheme.colorScheme.background,
+                                        )
+                                )
+                        )
+                )
+
+                Column(
                         modifier =
-                                Modifier.fillMaxWidth(0.85f)
-                                        .aspectRatio(1f)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
+                                Modifier.fillMaxSize()
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                        if (artworkUri != null) {
-                                AsyncImage(
-                                        model = artworkUri,
-                                        contentDescription = "Album art",
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.MusicNote,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(64.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                        }
-                }
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                // Track info
-                Text(
-                        text = title ?: "No track",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                        text = artist ?: "",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Seek bar
-                val progress =
-                        if (durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
-                val displayProgress = if (isSeeking >= 0f) isSeeking else progress
-
-                Slider(
-                        value = displayProgress,
-                        onValueChange = { isSeeking = it },
-                        onValueChangeFinished = {
-                                if (isSeeking >= 0f) {
-                                        playerViewModel.seekTo((isSeeking * durationMs).toLong())
-                                        isSeeking = -1f
+                        // Top bar
+                        Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                        ) {
+                                IconButton(onClick = onBack) {
+                                        Icon(
+                                                Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "Minimize",
+                                                tint = MaterialTheme.colorScheme.onBackground
+                                        )
                                 }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors =
-                                SliderDefaults.colors(
-                                        thumbColor = MaterialTheme.colorScheme.primary,
-                                        activeTrackColor = MaterialTheme.colorScheme.primary
+                                Text(
+                                        text = "NOW PLAYING",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        letterSpacing = 1.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                )
-
-                Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                        Text(
-                                text = formatTime(positionMs),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                                text = formatTime(durationMs),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Shuffle / Repeat row
-                Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                ) {
-                        IconButton(onClick = { playerViewModel.toggleShuffle() }) {
-                                Icon(
-                                        if (queue?.shuffleEnabled == true) Icons.Default.ShuffleOn
-                                        else Icons.Default.Shuffle,
-                                        contentDescription = "Shuffle",
-                                        tint =
-                                                if (queue?.shuffleEnabled == true)
-                                                        MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                IconButton(onClick = onOpenQueue) {
+                                        Icon(
+                                                Icons.AutoMirrored.Filled.QueueMusic,
+                                                contentDescription = "Queue",
+                                                tint = MaterialTheme.colorScheme.onBackground
+                                        )
+                                }
                         }
 
-                        // Main controls
-                        IconButton(
-                                onClick = { playerViewModel.previous() },
-                                modifier = Modifier.size(48.dp)
-                        ) {
-                                Icon(
-                                        Icons.Default.SkipPrevious,
-                                        contentDescription = "Previous",
-                                        modifier = Modifier.size(32.dp),
-                                        tint = MaterialTheme.colorScheme.onBackground
-                                )
-                        }
+                        Spacer(modifier = Modifier.height(24.dp))
 
-                        IconButton(
-                                onClick = {
-                                        if (isPlaying) playerViewModel.pause()
-                                        else playerViewModel.play()
-                                },
+                        // Album art with shadow
+                        Box(
                                 modifier =
-                                        Modifier.size(64.dp)
-                                                .background(
-                                                        MaterialTheme.colorScheme.primary,
-                                                        CircleShape
+                                        Modifier.fillMaxWidth(0.80f)
+                                                .aspectRatio(1f)
+                                                .shadow(
+                                                        elevation = 24.dp,
+                                                        shape = RoundedCornerShape(20.dp),
+                                                        ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                                        spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                                                 )
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center
                         ) {
-                                Icon(
-                                        if (isPlaying) Icons.Default.Pause
-                                        else Icons.Default.PlayArrow,
-                                        contentDescription = if (isPlaying) "Pause" else "Play",
-                                        modifier = Modifier.size(36.dp),
-                                        tint = MaterialTheme.colorScheme.onPrimary
-                                )
+                                if (artworkUri != null) {
+                                        AsyncImage(
+                                                model = artworkUri,
+                                                contentDescription = "Album art",
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Crop
+                                        )
+                                } else {
+                                        ImagePlaceholder(
+                                                icon = Icons.Default.MusicNote,
+                                                size = 200.dp,
+                                                shape = RoundedCornerShape(20.dp),
+                                        )
+                                }
                         }
 
-                        IconButton(
-                                onClick = { playerViewModel.next() },
-                                modifier = Modifier.size(48.dp)
-                        ) {
-                                Icon(
-                                        Icons.Default.SkipNext,
-                                        contentDescription = "Next",
-                                        modifier = Modifier.size(32.dp),
-                                        tint = MaterialTheme.colorScheme.onBackground
-                                )
-                        }
+                        Spacer(modifier = Modifier.height(32.dp))
 
-                        IconButton(onClick = { playerViewModel.toggleRepeat() }) {
-                                val repeatIcon =
-                                        when (queue?.repeatMode) {
-                                                RepeatMode.ONE -> Icons.Default.RepeatOneOn
-                                                RepeatMode.ALL -> Icons.Default.RepeatOn
-                                                else -> Icons.Default.Repeat
-                                        }
-                                Icon(
-                                        repeatIcon,
-                                        contentDescription = "Repeat",
-                                        tint =
-                                                if (queue?.repeatMode != RepeatMode.OFF)
-                                                        MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                        }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Player picker button
-                Row(
-                        modifier =
-                                Modifier.fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        .clickable { showPlayerPicker = true }
-                                        .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                ) {
-                        Icon(
-                                Icons.Default.Speaker,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        // Track info
                         Text(
-                                text = player?.name ?: "Select Player",
-                                style = MaterialTheme.typography.bodyMedium,
+                                text = title ?: "No track",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
                         )
-                }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                                text = artist ?: "",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                        )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        if (isLive) {
+                                // Live indicator instead of seek bar
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                        Box(
+                                                modifier = Modifier
+                                                        .size(8.dp)
+                                                        .background(
+                                                                MaterialTheme.colorScheme.error,
+                                                                CircleShape
+                                                        )
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                                text = "LIVE",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.error,
+                                                letterSpacing = 1.sp
+                                        )
+                                }
+                        } else {
+                                // Seek bar for non-live content
+                                val progress =
+                                        if (durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
+                                val displayProgress = if (isSeeking >= 0f) isSeeking else progress
+
+                                Slider(
+                                        value = displayProgress,
+                                        onValueChange = { isSeeking = it },
+                                        onValueChangeFinished = {
+                                                if (isSeeking >= 0f) {
+                                                        playerViewModel.seekTo((isSeeking * durationMs).toLong())
+                                                        isSeeking = -1f
+                                                }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors =
+                                                SliderDefaults.colors(
+                                                        thumbColor = MaterialTheme.colorScheme.primary,
+                                                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                                                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                                )
+                                )
+
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                        Text(
+                                                text = formatTime(positionMs),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                                text = formatTime(durationMs),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Shuffle / Repeat row
+                        Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                        ) {
+                                IconButton(onClick = { playerViewModel.toggleShuffle() }) {
+                                        Icon(
+                                                if (queue?.shuffleEnabled == true) Icons.Default.ShuffleOn
+                                                else Icons.Default.Shuffle,
+                                                contentDescription = "Shuffle",
+                                                tint =
+                                                        if (queue?.shuffleEnabled == true)
+                                                                MaterialTheme.colorScheme.primary
+                                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                }
+
+                                // Main controls
+                                IconButton(
+                                        onClick = { playerViewModel.previous() },
+                                        modifier = Modifier.size(48.dp)
+                                ) {
+                                        Icon(
+                                                Icons.Default.SkipPrevious,
+                                                contentDescription = "Previous",
+                                                modifier = Modifier.size(32.dp),
+                                                tint = MaterialTheme.colorScheme.onBackground
+                                        )
+                                }
+
+                                IconButton(
+                                        onClick = {
+                                                if (isPlaying) playerViewModel.pause()
+                                                else playerViewModel.play()
+                                        },
+                                        modifier =
+                                                Modifier.size(68.dp)
+                                                        .shadow(
+                                                                elevation = 8.dp,
+                                                                shape = CircleShape,
+                                                                ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                                                        )
+                                                        .background(
+                                                                MaterialTheme.colorScheme.primary,
+                                                                CircleShape
+                                                        )
+                                ) {
+                                        Icon(
+                                                if (isPlaying) Icons.Default.Pause
+                                                else Icons.Default.PlayArrow,
+                                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                                modifier = Modifier.size(36.dp),
+                                                tint = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                }
+
+                                IconButton(
+                                        onClick = { playerViewModel.next() },
+                                        modifier = Modifier.size(48.dp)
+                                ) {
+                                        Icon(
+                                                Icons.Default.SkipNext,
+                                                contentDescription = "Next",
+                                                modifier = Modifier.size(32.dp),
+                                                tint = MaterialTheme.colorScheme.onBackground
+                                        )
+                                }
+
+                                IconButton(onClick = { playerViewModel.toggleRepeat() }) {
+                                        val repeatIcon =
+                                                when (queue?.repeatMode) {
+                                                        RepeatMode.ONE -> Icons.Default.RepeatOneOn
+                                                        RepeatMode.ALL -> Icons.Default.RepeatOn
+                                                        else -> Icons.Default.Repeat
+                                                }
+                                        Icon(
+                                                repeatIcon,
+                                                contentDescription = "Repeat",
+                                                tint =
+                                                        if (queue?.repeatMode != RepeatMode.OFF)
+                                                                MaterialTheme.colorScheme.primary
+                                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Player picker button
+                        Row(
+                                modifier =
+                                        Modifier.fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .border(
+                                                        1.dp,
+                                                        MaterialTheme.colorScheme.outline,
+                                                        RoundedCornerShape(12.dp)
+                                                )
+                                                .background(
+                                                        MaterialTheme.colorScheme.surfaceVariant.copy(
+                                                                alpha = 0.5f
+                                                        )
+                                                )
+                                                .clickable { showPlayerPicker = true }
+                                                .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                        ) {
+                                Icon(
+                                        Icons.Default.Speaker,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                        text = player?.name ?: "Select Player",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                )
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+                }
         }
 
         // Player picker dialog

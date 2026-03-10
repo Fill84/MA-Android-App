@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
@@ -31,11 +33,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import io.musicassistant.companion.ui.common.EmptyState
+import io.musicassistant.companion.ui.common.ImagePlaceholder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,42 +53,51 @@ fun QueueScreen(playerViewModel: PlayerViewModel, onBack: () -> Unit) {
     val currentIndex = queue?.currentIndex
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // Header
-        Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+        // Header with gradient
+        Box(
+                modifier = Modifier.fillMaxWidth().background(
+                        Brush.verticalGradient(
+                                listOf(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.06f),
+                                        MaterialTheme.colorScheme.background,
+                                )
+                        )
+                )
         ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                        Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.onBackground
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Column {
-                Text(
-                        text = "Queue",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                        text = "${queueItems.size} tracks",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                            text = "Queue",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                            text = "${queueItems.size} tracks",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
         if (queueItems.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                        text = "Queue is empty",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            EmptyState(
+                    icon = Icons.AutoMirrored.Filled.QueueMusic,
+                    title = "Queue is empty",
+                    subtitle = "Play some music to build your queue",
+            )
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(items = queueItems, key = { _, item -> item.queueItemId }) {
@@ -139,25 +156,40 @@ private fun QueueItemRow(
 ) {
     val backgroundColor =
             if (isCurrent) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
             } else {
                 MaterialTheme.colorScheme.background
             }
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val accentWidth = 3.dp
 
     Row(
             modifier =
                     Modifier.fillMaxWidth()
                             .background(backgroundColor)
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .let { mod -> mod.then(Modifier.background(backgroundColor)) },
+                            .drawBehind {
+                                if (isCurrent) {
+                                    drawRect(
+                                            color = primaryColor,
+                                            topLeft = Offset.Zero,
+                                            size = Size(accentWidth.toPx(), size.height),
+                                    )
+                                }
+                            }
+                            .padding(
+                                    start = if (isCurrent) 16.dp else 16.dp,
+                                    end = 16.dp,
+                                    top = 8.dp,
+                                    bottom = 8.dp,
+                            ),
             verticalAlignment = Alignment.CenterVertically
     ) {
         // Thumbnail
+        val thumbnailShape = RoundedCornerShape(8.dp)
         Box(
                 modifier =
                         Modifier.size(48.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                .clip(thumbnailShape),
                 contentAlignment = Alignment.Center
         ) {
             val image = item.image ?: item.mediaItem?.image
@@ -170,11 +202,10 @@ private fun QueueItemRow(
                         contentScale = ContentScale.Crop
                 )
             } else {
-                Icon(
-                        Icons.Default.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                ImagePlaceholder(
+                        icon = Icons.Default.MusicNote,
+                        size = 48.dp,
+                        shape = thumbnailShape,
                 )
             }
         }

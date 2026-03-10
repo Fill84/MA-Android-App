@@ -1,19 +1,14 @@
 package io.musicassistant.companion.ui.library
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -21,21 +16,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Radio
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -50,17 +36,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import io.musicassistant.companion.data.model.Album
-import io.musicassistant.companion.data.model.Artist
-import io.musicassistant.companion.data.model.Playlist
 import io.musicassistant.companion.data.model.Radio
 import io.musicassistant.companion.data.model.Track
+import io.musicassistant.companion.ui.common.AlbumGridItem
+import io.musicassistant.companion.ui.common.ArtistRow
+import io.musicassistant.companion.ui.common.PlaylistRow
+import io.musicassistant.companion.ui.common.RadioRow
+import io.musicassistant.companion.ui.common.ShimmerTrackRow
+import io.musicassistant.companion.ui.common.TrackRow
 
 private val tabs = listOf("Artists", "Albums", "Tracks", "Playlists", "Radio")
 
@@ -91,13 +76,34 @@ fun LibraryScreen(
             PrimaryScrollableTabRow(
                     selectedTabIndex = selectedTab,
                     modifier = Modifier.fillMaxWidth(),
-                    edgePadding = 16.dp
+                    edgePadding = 16.dp,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    indicator = {
+                        TabRowDefaults.PrimaryIndicator(
+                                modifier = Modifier.tabIndicatorOffset(
+                                        selectedTab,
+                                        matchContentSize = true,
+                                ),
+                                height = 3.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
             ) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
                             selected = selectedTab == index,
                             onClick = { selectedTab = index },
-                            text = { Text(title) }
+                            text = {
+                                Text(
+                                        title,
+                                        fontWeight = if (selectedTab == index) FontWeight.SemiBold
+                                                     else FontWeight.Normal,
+                                        color = if (selectedTab == index)
+                                                    MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                     )
                 }
             }
@@ -121,7 +127,6 @@ private fun ArtistsTab(viewModel: LibraryViewModel, onArtistClick: (String) -> U
 
     LaunchedEffect(Unit) { if (artists.isEmpty()) viewModel.loadArtists() }
 
-    // Load more when near the end
     val shouldLoadMore by remember {
         derivedStateOf {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -169,12 +174,12 @@ private fun AlbumsTab(viewModel: LibraryViewModel, onAlbumClick: (String) -> Uni
     }
 
     LazyVerticalGrid(
-            columns = GridCells.Adaptive(140.dp),
+            columns = GridCells.Adaptive(150.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         items(albums, key = { it.itemId }) { album ->
             AlbumGridItem(
@@ -187,7 +192,7 @@ private fun AlbumsTab(viewModel: LibraryViewModel, onAlbumClick: (String) -> Uni
 
     if (isLoading && albums.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+            LoadingIndicator()
         }
     }
 }
@@ -300,256 +305,12 @@ private fun RadiosTab(viewModel: LibraryViewModel, onRadioClick: (Radio) -> Unit
     }
 }
 
-// ── Row components ────────────────────────────────────────────
-
-@Composable
-private fun ArtistRow(artist: Artist, imageUrl: String?, onClick: () -> Unit) {
-    Row(
-            modifier =
-                    Modifier.fillMaxWidth()
-                            .clickable(onClick = onClick)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-                modifier =
-                        Modifier.size(48.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                        model = imageUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                        Icons.Default.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-                text = artist.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun AlbumGridItem(album: Album, imageUrl: String?, onClick: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Box(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .height(140.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                        model = imageUrl,
-                        contentDescription = album.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                        Icons.Default.Album,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-                text = album.name,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-        )
-        val artistName = album.artists.firstOrNull()?.name
-        if (artistName != null) {
-            Text(
-                    text = artistName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
-private fun TrackRow(track: Track, imageUrl: String?, onClick: () -> Unit) {
-    Row(
-            modifier =
-                    Modifier.fillMaxWidth()
-                            .clickable(onClick = onClick)
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-                modifier =
-                        Modifier.size(44.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                        model = imageUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(44.dp),
-                        contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                        Icons.Default.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                    text = track.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-            )
-            val artistName = track.artists.firstOrNull()?.name
-            if (artistName != null) {
-                Text(
-                        text = artistName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        Text(
-                text = formatDuration(track.duration),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun PlaylistRow(playlist: Playlist, imageUrl: String?, onClick: () -> Unit) {
-    Row(
-            modifier =
-                    Modifier.fillMaxWidth()
-                            .clickable(onClick = onClick)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-                modifier =
-                        Modifier.size(48.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                        model = imageUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                        Icons.AutoMirrored.Filled.PlaylistPlay,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                    text = playlist.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-            )
-            if (playlist.owner.isNotEmpty()) {
-                Text(
-                        text = playlist.owner,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RadioRow(radio: Radio, imageUrl: String?, onClick: () -> Unit) {
-    Row(
-            modifier =
-                    Modifier.fillMaxWidth()
-                            .clickable(onClick = onClick)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-                modifier =
-                        Modifier.size(48.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                        model = imageUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                        Icons.Default.Radio,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-                text = radio.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
 @Composable
 private fun LoadingIndicator() {
-    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        repeat(3) {
+            ShimmerTrackRow()
+            Spacer(Modifier.height(4.dp))
+        }
     }
-}
-
-private fun formatDuration(seconds: Int): String {
-    val m = seconds / 60
-    val s = seconds % 60
-    return "%d:%02d".format(m, s)
 }

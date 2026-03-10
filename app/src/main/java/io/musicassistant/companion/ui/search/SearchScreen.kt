@@ -1,7 +1,6 @@
 package io.musicassistant.companion.ui.search
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,16 +13,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -41,17 +35,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import io.musicassistant.companion.data.model.Album
-import io.musicassistant.companion.data.model.Artist
-import io.musicassistant.companion.data.model.Playlist
 import io.musicassistant.companion.data.model.Radio
 import io.musicassistant.companion.data.model.Track
+import io.musicassistant.companion.ui.common.AlbumRow
+import io.musicassistant.companion.ui.common.ArtistRow
+import io.musicassistant.companion.ui.common.EmptyState
+import io.musicassistant.companion.ui.common.PlaylistRow
+import io.musicassistant.companion.ui.common.RadioRow
+import io.musicassistant.companion.ui.common.TrackRow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,13 +81,13 @@ fun SearchScreen(
                 }
         ) { innerPadding ->
                 Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                        // Search bar
                         TextField(
                                 value = query,
                                 onValueChange = { searchViewModel.onQueryChanged(it) },
                                 modifier =
                                         Modifier.fillMaxWidth()
-                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                                .shadow(2.dp, RoundedCornerShape(28.dp)),
                                 placeholder = { Text("Search artists, albums, tracks...") },
                                 leadingIcon = {
                                         Icon(Icons.Default.Search, contentDescription = null)
@@ -112,15 +107,16 @@ fun SearchScreen(
                                         }
                                 },
                                 singleLine = true,
-                                shape = RoundedCornerShape(24.dp),
+                                shape = RoundedCornerShape(28.dp),
                                 colors =
                                         TextFieldDefaults.colors(
                                                 focusedContainerColor =
-                                                        MaterialTheme.colorScheme.surfaceVariant,
+                                                        MaterialTheme.colorScheme.surfaceContainer,
                                                 unfocusedContainerColor =
                                                         MaterialTheme.colorScheme.surfaceVariant,
                                                 focusedIndicatorColor = Color.Transparent,
-                                                unfocusedIndicatorColor = Color.Transparent
+                                                unfocusedIndicatorColor = Color.Transparent,
+                                                cursorColor = MaterialTheme.colorScheme.primary,
                                         )
                         )
 
@@ -129,20 +125,20 @@ fun SearchScreen(
                                         modifier = Modifier.fillMaxWidth().padding(32.dp),
                                         contentAlignment = Alignment.Center
                                 ) { CircularProgressIndicator(modifier = Modifier.size(24.dp)) }
+                        } else if (query.isEmpty()) {
+                                EmptyState(
+                                        icon = Icons.Default.Search,
+                                        title = "Search your library",
+                                        subtitle = "Find artists, albums, tracks, and more",
+                                )
                         } else if (query.length >= 2 && !hasResults) {
-                                Box(
-                                        modifier = Modifier.fillMaxWidth().padding(32.dp),
-                                        contentAlignment = Alignment.Center
-                                ) {
-                                        Text(
-                                                text = "No results found",
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                }
+                                EmptyState(
+                                        icon = Icons.Default.SearchOff,
+                                        title = "No results found",
+                                        subtitle = "Try a different search term",
+                                )
                         } else {
                                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                        // Artists
                                         if (results.artists.isNotEmpty()) {
                                                 item { SectionHeader("Artists") }
                                                 items(
@@ -160,11 +156,11 @@ fun SearchScreen(
                                                                         },
                                                                 onClick = {
                                                                         onArtistClick(artist.itemId)
-                                                                }
+                                                                },
+                                                                imageSize = 44.dp
                                                         )
                                                 }
                                         }
-                                        // Albums
                                         if (results.albums.isNotEmpty()) {
                                                 item { SectionHeader("Albums") }
                                                 items(
@@ -186,7 +182,6 @@ fun SearchScreen(
                                                         )
                                                 }
                                         }
-                                        // Tracks
                                         if (results.tracks.isNotEmpty()) {
                                                 item { SectionHeader("Tracks") }
                                                 items(
@@ -206,7 +201,6 @@ fun SearchScreen(
                                                         )
                                                 }
                                         }
-                                        // Playlists
                                         if (results.playlists.isNotEmpty()) {
                                                 item { SectionHeader("Playlists") }
                                                 items(
@@ -227,11 +221,11 @@ fun SearchScreen(
                                                                         onPlaylistClick(
                                                                                 playlist.itemId
                                                                         )
-                                                                }
+                                                                },
+                                                                imageSize = 44.dp
                                                         )
                                                 }
                                         }
-                                        // Radio
                                         if (results.radio.isNotEmpty()) {
                                                 item { SectionHeader("Radio") }
                                                 items(
@@ -247,7 +241,8 @@ fun SearchScreen(
                                                                                                 it
                                                                                         )
                                                                         },
-                                                                onClick = { onRadioClick(radio) }
+                                                                onClick = { onRadioClick(radio) },
+                                                                imageSize = 44.dp
                                                         )
                                                 }
                                         }
@@ -261,262 +256,23 @@ fun SearchScreen(
 
 @Composable
 private fun SectionHeader(title: String) {
-        Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-        )
-}
-
-@Composable
-private fun ArtistRow(artist: Artist, imageUrl: String?, onClick: () -> Unit) {
         Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
         ) {
                 Box(
-                        modifier =
-                                Modifier.size(44.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(44.dp),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.Person,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(22.dp)
-                                )
-                        }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
+                        modifier = Modifier
+                                .width(3.dp)
+                                .height(16.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MaterialTheme.colorScheme.primary)
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
-                        text = artist.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
                 )
         }
-}
-
-@Composable
-private fun AlbumRow(album: Album, imageUrl: String?, onClick: () -> Unit) {
-        Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-        ) {
-                Box(
-                        modifier =
-                                Modifier.size(44.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(44.dp),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.Album,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(22.dp)
-                                )
-                        }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                                text = album.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                        )
-                        val artistName = album.artists.firstOrNull()?.name
-                        if (artistName != null) {
-                                Text(
-                                        text = artistName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                )
-                        }
-                }
-        }
-}
-
-@Composable
-private fun TrackRow(track: Track, imageUrl: String?, onClick: () -> Unit) {
-        Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-        ) {
-                Box(
-                        modifier =
-                                Modifier.size(44.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(44.dp),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.MusicNote,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(22.dp)
-                                )
-                        }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                                text = track.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                        )
-                        val artistName = track.artists.firstOrNull()?.name
-                        if (artistName != null) {
-                                Text(
-                                        text = artistName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                )
-                        }
-                }
-                Text(
-                        text = formatDuration(track.duration),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-        }
-}
-
-@Composable
-private fun PlaylistRow(playlist: Playlist, imageUrl: String?, onClick: () -> Unit) {
-        Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-        ) {
-                Box(
-                        modifier =
-                                Modifier.size(44.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(44.dp),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.AutoMirrored.Filled.PlaylistPlay,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(22.dp)
-                                )
-                        }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                                text = playlist.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                        )
-                        if (playlist.owner.isNotEmpty()) {
-                                Text(
-                                        text = playlist.owner,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                )
-                        }
-                }
-        }
-}
-
-@Composable
-private fun RadioRow(radio: Radio, imageUrl: String?, onClick: () -> Unit) {
-        Row(
-                modifier =
-                        Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-        ) {
-                Box(
-                        modifier =
-                                Modifier.size(44.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                ) {
-                        if (imageUrl != null) {
-                                AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(44.dp),
-                                        contentScale = ContentScale.Crop
-                                )
-                        } else {
-                                Icon(
-                                        Icons.Default.Radio,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(22.dp)
-                                )
-                        }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                        text = radio.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                )
-        }
-}
-
-private fun formatDuration(seconds: Int): String {
-        val m = seconds / 60
-        val s = seconds % 60
-        return "%d:%02d".format(m, s)
 }

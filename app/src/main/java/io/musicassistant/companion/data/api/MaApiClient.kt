@@ -42,7 +42,7 @@ import okhttp3.WebSocketListener
  * Connects to ws://{host}:{port}/ws and communicates via a JSON message protocol. Supports
  * auto-reconnect with exponential backoff.
  */
-class MaApiClient {
+class MaApiClient(private val httpClient: OkHttpClient) {
 
     companion object {
         private const val TAG = "MaApiClient"
@@ -57,12 +57,6 @@ class MaApiClient {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-    private val httpClient =
-            OkHttpClient.Builder()
-                    .readTimeout(0, TimeUnit.MILLISECONDS) // No read timeout for WebSocket
-                    .pingInterval(30, TimeUnit.SECONDS)
-                    .build()
 
     private var webSocket: WebSocket? = null
     private var serverUrl: String = ""
@@ -207,19 +201,6 @@ class MaApiClient {
         }
 
         return deferred.await()
-    }
-
-    /** Subscribe to server events for a specific event type (or all). */
-    suspend fun subscribe(eventFilter: String? = null): JsonElement {
-        val args = mutableMapOf<String, JsonElement>()
-        if (eventFilter != null) {
-            args["event_filter"] =
-                    buildJsonObject {
-                        // wrap in json primitive
-                    }
-        }
-        // The subscribe command uses "subscribe_events"
-        return sendCommand("subscribe_events")
     }
 
     private fun doConnect() {
@@ -392,7 +373,6 @@ class MaApiClient {
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            Log.d(TAG, "Raw WS message: $text")
             handleMessage(text)
         }
 
