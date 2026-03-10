@@ -1,6 +1,6 @@
 # Music Assistant Companion App for Android
 
-The official Android companion app for [Music Assistant](https://music-assistant.io/) — a free, open-source, self-hosted music server.
+The Android companion app for [Music Assistant](https://music-assistant.io/) — a free, open-source, self-hosted music server.
 
 ## Features
 
