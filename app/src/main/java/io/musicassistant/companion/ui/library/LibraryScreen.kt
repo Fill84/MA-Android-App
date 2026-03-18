@@ -1,5 +1,6 @@
 package io.musicassistant.companion.ui.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,13 +36,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Radio
 import io.musicassistant.companion.data.model.Track
 import io.musicassistant.companion.ui.common.AlbumGridItem
-import io.musicassistant.companion.ui.common.ArtistRow
+import io.musicassistant.companion.ui.common.MediaContextMenuItem
+import io.musicassistant.companion.ui.common.ArtistGridItem
 import io.musicassistant.companion.ui.common.PlaylistRow
 import io.musicassistant.companion.ui.common.RadioRow
 import io.musicassistant.companion.ui.common.ShimmerTrackRow
@@ -57,9 +63,12 @@ fun LibraryScreen(
         onAlbumClick: (String) -> Unit,
         onTrackClick: (Track) -> Unit,
         onPlaylistClick: (String) -> Unit,
-        onRadioClick: (Radio) -> Unit
+        onRadioClick: (Radio) -> Unit,
+        onMediaLongClick: (MediaContextMenuItem) -> Unit = {}
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            .compositeOver(MaterialTheme.colorScheme.background)
 
     Scaffold(
             topBar = {
@@ -67,17 +76,30 @@ fun LibraryScreen(
                         title = { Text("Library", fontWeight = FontWeight.Bold) },
                         colors =
                                 TopAppBarDefaults.topAppBarColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
-                                )
+                                        containerColor = topBarColor
+                                ),
+                        windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                 )
-            }
+            },
+            contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
     ) { innerPadding ->
-        Column(modifier = Modifier.padding(innerPadding)) {
+        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            Box(
+                    modifier = Modifier.fillMaxWidth().height(200.dp).background(
+                            Brush.verticalGradient(
+                                    listOf(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                            MaterialTheme.colorScheme.background,
+                                    )
+                            )
+                    )
+            )
+        Column(modifier = Modifier.fillMaxSize()) {
             PrimaryScrollableTabRow(
                     selectedTabIndex = selectedTab,
                     modifier = Modifier.fillMaxWidth(),
                     edgePadding = 16.dp,
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = topBarColor,
                     contentColor = MaterialTheme.colorScheme.primary,
                     indicator = {
                         TabRowDefaults.PrimaryIndicator(
@@ -109,27 +131,28 @@ fun LibraryScreen(
             }
 
             when (selectedTab) {
-                0 -> ArtistsTab(libraryViewModel, onArtistClick)
-                1 -> AlbumsTab(libraryViewModel, onAlbumClick)
-                2 -> TracksTab(libraryViewModel, onTrackClick)
-                3 -> PlaylistsTab(libraryViewModel, onPlaylistClick)
-                4 -> RadiosTab(libraryViewModel, onRadioClick)
+                0 -> ArtistsTab(libraryViewModel, onArtistClick, onMediaLongClick)
+                1 -> AlbumsTab(libraryViewModel, onAlbumClick, onMediaLongClick)
+                2 -> TracksTab(libraryViewModel, onTrackClick, onMediaLongClick)
+                3 -> PlaylistsTab(libraryViewModel, onPlaylistClick, onMediaLongClick)
+                4 -> RadiosTab(libraryViewModel, onRadioClick, onMediaLongClick)
             }
+        }
         }
     }
 }
 
 @Composable
-private fun ArtistsTab(viewModel: LibraryViewModel, onArtistClick: (String) -> Unit) {
+private fun ArtistsTab(viewModel: LibraryViewModel, onArtistClick: (String) -> Unit, onMediaLongClick: (MediaContextMenuItem) -> Unit) {
     val artists by viewModel.artists.collectAsState()
     val isLoading by viewModel.artistsLoading.collectAsState()
-    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
 
     LaunchedEffect(Unit) { if (artists.isEmpty()) viewModel.loadArtists() }
 
     val shouldLoadMore by remember {
         derivedStateOf {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             lastVisible >= artists.size - 10
         }
     }
@@ -137,26 +160,33 @@ private fun ArtistsTab(viewModel: LibraryViewModel, onArtistClick: (String) -> U
         if (shouldLoadMore && artists.isNotEmpty()) viewModel.loadArtists()
     }
 
-    LazyColumn(
-            state = listState,
+    LazyVerticalGrid(
+            columns = GridCells.Adaptive(150.dp),
+            state = gridState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 8.dp)
+            contentPadding = PaddingValues(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         items(artists, key = { it.itemId }) { artist ->
-            ArtistRow(
+            ArtistGridItem(
                     artist = artist,
                     imageUrl = artist.resolvedImage?.let { viewModel.getImageUrl(it) },
-                    onClick = { onArtistClick(artist.itemId) }
+                    onClick = { onArtistClick(artist.itemId) },
+                    onLongClick = { onMediaLongClick(MediaContextMenuItem(artist.name, artist.uri, MediaType.ARTIST)) }
             )
         }
-        if (isLoading) {
-            item { LoadingIndicator() }
+    }
+
+    if (isLoading && artists.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            LoadingIndicator()
         }
     }
 }
 
 @Composable
-private fun AlbumsTab(viewModel: LibraryViewModel, onAlbumClick: (String) -> Unit) {
+private fun AlbumsTab(viewModel: LibraryViewModel, onAlbumClick: (String) -> Unit, onMediaLongClick: (MediaContextMenuItem) -> Unit) {
     val albums by viewModel.albums.collectAsState()
     val isLoading by viewModel.albumsLoading.collectAsState()
     val gridState = rememberLazyGridState()
@@ -185,7 +215,8 @@ private fun AlbumsTab(viewModel: LibraryViewModel, onAlbumClick: (String) -> Uni
             AlbumGridItem(
                     album = album,
                     imageUrl = album.resolvedImage?.let { viewModel.getImageUrl(it) },
-                    onClick = { onAlbumClick(album.itemId) }
+                    onClick = { onAlbumClick(album.itemId) },
+                    onLongClick = { onMediaLongClick(MediaContextMenuItem(album.name, album.uri, MediaType.ALBUM)) }
             )
         }
     }
@@ -198,7 +229,7 @@ private fun AlbumsTab(viewModel: LibraryViewModel, onAlbumClick: (String) -> Uni
 }
 
 @Composable
-private fun TracksTab(viewModel: LibraryViewModel, onTrackClick: (Track) -> Unit) {
+private fun TracksTab(viewModel: LibraryViewModel, onTrackClick: (Track) -> Unit, onMediaLongClick: (MediaContextMenuItem) -> Unit) {
     val tracks by viewModel.tracks.collectAsState()
     val isLoading by viewModel.tracksLoading.collectAsState()
     val listState = rememberLazyListState()
@@ -224,7 +255,8 @@ private fun TracksTab(viewModel: LibraryViewModel, onTrackClick: (Track) -> Unit
             TrackRow(
                     track = track,
                     imageUrl = track.resolvedImage?.let { viewModel.getImageUrl(it) },
-                    onClick = { onTrackClick(track) }
+                    onClick = { onTrackClick(track) },
+                    onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
             )
         }
         if (isLoading) {
@@ -234,7 +266,7 @@ private fun TracksTab(viewModel: LibraryViewModel, onTrackClick: (Track) -> Unit
 }
 
 @Composable
-private fun PlaylistsTab(viewModel: LibraryViewModel, onPlaylistClick: (String) -> Unit) {
+private fun PlaylistsTab(viewModel: LibraryViewModel, onPlaylistClick: (String) -> Unit, onMediaLongClick: (MediaContextMenuItem) -> Unit) {
     val playlists by viewModel.playlists.collectAsState()
     val isLoading by viewModel.playlistsLoading.collectAsState()
     val listState = rememberLazyListState()
@@ -260,7 +292,8 @@ private fun PlaylistsTab(viewModel: LibraryViewModel, onPlaylistClick: (String) 
             PlaylistRow(
                     playlist = playlist,
                     imageUrl = playlist.resolvedImage?.let { viewModel.getImageUrl(it) },
-                    onClick = { onPlaylistClick(playlist.itemId) }
+                    onClick = { onPlaylistClick(playlist.itemId) },
+                    onLongClick = { onMediaLongClick(MediaContextMenuItem(playlist.name, playlist.uri, MediaType.PLAYLIST)) }
             )
         }
         if (isLoading) {
@@ -270,7 +303,7 @@ private fun PlaylistsTab(viewModel: LibraryViewModel, onPlaylistClick: (String) 
 }
 
 @Composable
-private fun RadiosTab(viewModel: LibraryViewModel, onRadioClick: (Radio) -> Unit) {
+private fun RadiosTab(viewModel: LibraryViewModel, onRadioClick: (Radio) -> Unit, onMediaLongClick: (MediaContextMenuItem) -> Unit) {
     val radios by viewModel.radios.collectAsState()
     val isLoading by viewModel.radiosLoading.collectAsState()
     val listState = rememberLazyListState()
@@ -296,7 +329,8 @@ private fun RadiosTab(viewModel: LibraryViewModel, onRadioClick: (Radio) -> Unit
             RadioRow(
                     radio = radio,
                     imageUrl = radio.resolvedImage?.let { viewModel.getImageUrl(it) },
-                    onClick = { onRadioClick(radio) }
+                    onClick = { onRadioClick(radio) },
+                    onLongClick = { onMediaLongClick(MediaContextMenuItem(radio.name, radio.uri, MediaType.RADIO)) }
             )
         }
         if (isLoading) {

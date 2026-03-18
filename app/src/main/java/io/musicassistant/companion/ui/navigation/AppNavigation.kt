@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -35,8 +36,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.settings.SettingsModule
+import io.musicassistant.companion.ui.common.MediaContextMenu
+import io.musicassistant.companion.ui.common.MediaContextMenuItem
 import io.musicassistant.companion.service.MusicService
 import io.musicassistant.companion.service.ServiceLocator
 import io.musicassistant.companion.ui.home.HomeScreen
@@ -53,6 +59,7 @@ import io.musicassistant.companion.ui.player.PlayerViewModel
 import io.musicassistant.companion.ui.player.QueueScreen
 import io.musicassistant.companion.ui.search.SearchScreen
 import io.musicassistant.companion.ui.search.SearchViewModel
+import io.musicassistant.companion.ui.settings.PlayerSettingsScreen
 import io.musicassistant.companion.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 
@@ -68,6 +75,7 @@ object Routes {
     const val ARTIST_DETAIL = "artist/{artistId}"
     const val ALBUM_DETAIL = "album/{albumId}"
     const val PLAYLIST_DETAIL = "playlist/{playlistId}"
+    const val PLAYER_SETTINGS = "player_settings/{playerId}"
 }
 
 private data class BottomNavItem(val route: String, val label: String, val icon: ImageVector)
@@ -130,6 +138,10 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
     val homeViewModel: HomeViewModel = viewModel()
     val searchViewModel: SearchViewModel = viewModel()
 
+    // Context menu state — shared across all screens
+    var contextMenuItem by remember { mutableStateOf<MediaContextMenuItem?>(null) }
+    val onMediaLongClick: (MediaContextMenuItem) -> Unit = { contextMenuItem = it }
+
     val showBottomBar =
             currentRoute in listOf(Routes.HOME, Routes.SEARCH, Routes.LIBRARY, Routes.SETTINGS)
     val showMiniPlayer = currentRoute != Routes.NOW_PLAYING && currentRoute != Routes.QUEUE
@@ -144,8 +156,10 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                         )
                     }
                     if (showBottomBar) {
+                        val navBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                .compositeOver(MaterialTheme.colorScheme.background)
                         NavigationBar(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                containerColor = navBarColor,
                                 tonalElevation = 0.dp,
                         ) {
                             bottomNavItems.forEach { item ->
@@ -183,6 +197,17 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                 }
             }
     ) { innerPadding ->
+        // Context menu bottom sheet
+        contextMenuItem?.let { item ->
+            MediaContextMenu(
+                    item = item,
+                    onPlay = { uri, mediaType, option ->
+                        playerViewModel.playMedia(uri, mediaType, option)
+                    },
+                    onDismiss = { contextMenuItem = null }
+            )
+        }
+
         Box(modifier = Modifier.padding(innerPadding)) {
             NavHost(navController = innerNavController, startDestination = Routes.HOME) {
                 composable(Routes.HOME) {
@@ -198,7 +223,11 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             onPlayerClick = { player ->
                                 playerViewModel.selectPlayer(player.playerId)
                                 innerNavController.navigate(Routes.NOW_PLAYING)
-                            }
+                            },
+                            onPlayerLongClick = { player ->
+                                innerNavController.navigate("player_settings/${player.playerId}")
+                            },
+                            onMediaLongClick = onMediaLongClick
                     )
                 }
 
@@ -213,7 +242,8 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             onPlaylistClick = { innerNavController.navigate("playlist/$it") },
                             onRadioClick = { radio ->
                                 playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play")
-                            }
+                            },
+                            onMediaLongClick = onMediaLongClick
                     )
                 }
 
@@ -228,7 +258,8 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             onPlaylistClick = { innerNavController.navigate("playlist/$it") },
                             onRadioClick = { radio ->
                                 playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play")
-                            }
+                            },
+                            onMediaLongClick = onMediaLongClick
                     )
                 }
 
@@ -252,7 +283,10 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                     NowPlayingScreen(
                             playerViewModel = playerViewModel,
                             onBack = { innerNavController.popBackStack() },
-                            onOpenQueue = { innerNavController.navigate(Routes.QUEUE) }
+                            onOpenQueue = { innerNavController.navigate(Routes.QUEUE) },
+                            onOpenPlayerSettings = { playerId ->
+                                innerNavController.navigate("player_settings/$playerId")
+                            }
                     )
                 }
 
@@ -284,7 +318,8 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             libraryViewModel = libraryViewModel,
                             playerViewModel = playerViewModel,
                             onAlbumClick = { innerNavController.navigate("album/$it") },
-                            onBack = { innerNavController.popBackStack() }
+                            onBack = { innerNavController.popBackStack() },
+                            onMediaLongClick = onMediaLongClick
                     )
                 }
 
@@ -297,6 +332,20 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             albumId = albumId,
                             libraryViewModel = libraryViewModel,
                             playerViewModel = playerViewModel,
+                            onBack = { innerNavController.popBackStack() },
+                            onMediaLongClick = onMediaLongClick
+                    )
+                }
+
+                composable(
+                        Routes.PLAYER_SETTINGS,
+                        arguments = listOf(navArgument("playerId") { type = NavType.StringType })
+                ) { entry ->
+                    val playerId = entry.arguments?.getString("playerId") ?: return@composable
+                    val allPlayers by playerViewModel.players.collectAsState()
+                    val player = allPlayers.find { it.playerId == playerId }
+                    PlayerSettingsScreen(
+                            player = player,
                             onBack = { innerNavController.popBackStack() }
                     )
                 }
@@ -310,7 +359,8 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             playlistId = playlistId,
                             libraryViewModel = libraryViewModel,
                             playerViewModel = playerViewModel,
-                            onBack = { innerNavController.popBackStack() }
+                            onBack = { innerNavController.popBackStack() },
+                            onMediaLongClick = onMediaLongClick
                     )
                 }
             }

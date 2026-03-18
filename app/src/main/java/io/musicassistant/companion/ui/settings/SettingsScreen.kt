@@ -24,7 +24,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,6 +41,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -68,6 +70,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     val currentSettings = settings ?: return
+    val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            .compositeOver(MaterialTheme.colorScheme.background)
 
     Scaffold(
             topBar = {
@@ -75,15 +79,27 @@ fun SettingsScreen(onBack: () -> Unit) {
                         title = { Text(text = "Settings", fontWeight = FontWeight.Bold) },
                         colors =
                                 TopAppBarDefaults.topAppBarColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
-                                )
+                                        containerColor = topBarColor
+                                ),
+                        windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                 )
-            }
+            },
+            contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
     ) { innerPadding ->
+        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            Box(
+                    modifier = Modifier.fillMaxWidth().height(200.dp).background(
+                            Brush.verticalGradient(
+                                    listOf(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                            MaterialTheme.colorScheme.background,
+                                    )
+                            )
+                    )
+            )
         Column(
                 modifier =
                         Modifier.fillMaxSize()
-                                .padding(innerPadding)
                                 .verticalScroll(rememberScrollState())
                                 .padding(16.dp)
         ) {
@@ -95,6 +111,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                         value = currentSettings.serverName.ifEmpty { "Not connected" }
                 )
                 InfoItem(title = "URL", value = currentSettings.serverUrl.ifEmpty { "-" })
+
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(onClick = onBack) { Text("Switch Server") }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -206,8 +225,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(onClick = onBack) { Text("Switch Server") }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -257,6 +274,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             Spacer(modifier = Modifier.height(32.dp))
+        }
         }
     }
 }
@@ -380,7 +398,7 @@ private fun ThemeDropdown(currentMode: ThemeMode, onModeSelected: (ThemeMode) ->
         }
         Spacer(modifier = Modifier.width(16.dp))
 
-        FilledTonalButton(onClick = { expanded = true }) {
+        OutlinedButton(onClick = { expanded = true }) {
             Text(
                     text =
                             when (currentMode) {

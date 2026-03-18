@@ -2,6 +2,7 @@ package io.musicassistant.companion.ui.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +58,7 @@ import io.musicassistant.companion.data.model.Album
 import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Track
 import io.musicassistant.companion.ui.common.ImagePlaceholder
+import io.musicassistant.companion.ui.common.MediaContextMenuItem
 import io.musicassistant.companion.ui.common.SectionTitle
 import io.musicassistant.companion.ui.common.ShimmerTrackRow
 import io.musicassistant.companion.ui.common.TrackRow
@@ -68,7 +72,8 @@ fun ArtistDetailScreen(
         libraryViewModel: LibraryViewModel,
         playerViewModel: PlayerViewModel,
         onAlbumClick: (String) -> Unit,
-        onBack: () -> Unit
+        onBack: () -> Unit,
+        onMediaLongClick: (MediaContextMenuItem) -> Unit = {}
 ) {
         val artist by libraryViewModel.artistDetail.collectAsState()
         val albums by libraryViewModel.artistAlbums.collectAsState()
@@ -76,6 +81,8 @@ fun ArtistDetailScreen(
         val isLoading by libraryViewModel.artistDetailLoading.collectAsState()
 
         LaunchedEffect(artistId) { libraryViewModel.loadArtistDetail(artistId) }
+        val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                .compositeOver(MaterialTheme.colorScheme.background)
 
         Scaffold(
                 topBar = {
@@ -97,12 +104,24 @@ fun ArtistDetailScreen(
                                 },
                                 colors =
                                         TopAppBarDefaults.topAppBarColors(
-                                                containerColor = MaterialTheme.colorScheme.surface
-                                        )
+                                                containerColor = topBarColor
+                                        ),
+                                windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                         )
-                }
+                },
+                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
         ) { innerPadding ->
                 Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                        Box(
+                                modifier = Modifier.fillMaxWidth().height(200.dp).background(
+                                        Brush.verticalGradient(
+                                                listOf(
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                                        MaterialTheme.colorScheme.background,
+                                                )
+                                        )
+                                )
+                        )
                         if (artist != null) {
                                 LazyColumn(
                                         modifier = Modifier.fillMaxSize(),
@@ -252,7 +271,8 @@ fun ArtistDetailScreen(
                                                                                 MediaType.TRACK,
                                                                                 "play"
                                                                         )
-                                                                }
+                                                                },
+                                                                onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                                         )
                                                 }
                                         }
@@ -271,7 +291,8 @@ fun AlbumDetailScreen(
         albumId: String,
         libraryViewModel: LibraryViewModel,
         playerViewModel: PlayerViewModel,
-        onBack: () -> Unit
+        onBack: () -> Unit,
+        onMediaLongClick: (MediaContextMenuItem) -> Unit = {}
 ) {
         val album by libraryViewModel.albumDetail.collectAsState()
         val tracks by libraryViewModel.albumTracks.collectAsState()
@@ -282,6 +303,8 @@ fun AlbumDetailScreen(
         val currentTrackUri = queue?.currentItem?.mediaItem?.uri
 
         LaunchedEffect(albumId) { libraryViewModel.loadAlbumDetail(albumId) }
+        val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                .compositeOver(MaterialTheme.colorScheme.background)
 
         Scaffold(
                 topBar = {
@@ -303,12 +326,24 @@ fun AlbumDetailScreen(
                                 },
                                 colors =
                                         TopAppBarDefaults.topAppBarColors(
-                                                containerColor = MaterialTheme.colorScheme.surface
-                                        )
+                                                containerColor = topBarColor
+                                        ),
+                                windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                         )
-                }
+                },
+                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
         ) { innerPadding ->
                 Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                        Box(
+                                modifier = Modifier.fillMaxWidth().height(200.dp).background(
+                                        Brush.verticalGradient(
+                                                listOf(
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                                        MaterialTheme.colorScheme.background,
+                                                )
+                                        )
+                                )
+                        )
                         if (album != null) {
                                 LazyColumn(
                                         modifier = Modifier.fillMaxSize(),
@@ -451,7 +486,8 @@ fun AlbumDetailScreen(
                                                                                 "play"
                                                                         )
                                                                 }
-                                                        }
+                                                        },
+                                                        onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                                 )
                                         }
                                 }
@@ -469,13 +505,16 @@ fun PlaylistDetailScreen(
         playlistId: String,
         libraryViewModel: LibraryViewModel,
         playerViewModel: PlayerViewModel,
-        onBack: () -> Unit
+        onBack: () -> Unit,
+        onMediaLongClick: (MediaContextMenuItem) -> Unit = {}
 ) {
         val playlist by libraryViewModel.playlistDetail.collectAsState()
         val tracks by libraryViewModel.playlistTracks.collectAsState()
         val isLoading by libraryViewModel.playlistDetailLoading.collectAsState()
 
         LaunchedEffect(playlistId) { libraryViewModel.loadPlaylistDetail(playlistId) }
+        val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                .compositeOver(MaterialTheme.colorScheme.background)
 
         Scaffold(
                 topBar = {
@@ -497,12 +536,24 @@ fun PlaylistDetailScreen(
                                 },
                                 colors =
                                         TopAppBarDefaults.topAppBarColors(
-                                                containerColor = MaterialTheme.colorScheme.surface
-                                        )
+                                                containerColor = topBarColor
+                                        ),
+                                windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                         )
-                }
+                },
+                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
         ) { innerPadding ->
                 Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                        Box(
+                                modifier = Modifier.fillMaxWidth().height(200.dp).background(
+                                        Brush.verticalGradient(
+                                                listOf(
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                                        MaterialTheme.colorScheme.background,
+                                                )
+                                        )
+                                )
+                        )
                         if (playlist != null) {
                                 LazyColumn(
                                         modifier = Modifier.fillMaxSize(),
@@ -635,7 +686,8 @@ fun PlaylistDetailScreen(
                                                                         MediaType.TRACK,
                                                                         "play"
                                                                 )
-                                                        }
+                                                        },
+                                                        onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                                 )
                                         }
                                 }
@@ -714,13 +766,16 @@ private fun AlbumCard(album: Album, imageUrl: String?, onClick: () -> Unit) {
         }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumTrackRow(
         track: Track,
         isCurrentTrack: Boolean = false,
         isPlaying: Boolean = false,
-        onClick: () -> Unit
+        onClick: () -> Unit,
+        onLongClick: (() -> Unit)? = null
 ) {
+        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         val trackColor =
                 if (isCurrentTrack) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurface
@@ -731,7 +786,13 @@ private fun AlbumTrackRow(
         Row(
                 modifier =
                         Modifier.fillMaxWidth()
-                                .clickable(onClick = onClick)
+                                .combinedClickable(
+                                        onClick = onClick,
+                                        onLongClick = if (onLongClick != null) {{
+                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                onLongClick()
+                                        }} else null
+                                )
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
         ) {

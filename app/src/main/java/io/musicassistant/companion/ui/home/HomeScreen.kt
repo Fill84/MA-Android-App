@@ -1,7 +1,9 @@
 package io.musicassistant.companion.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,13 +38,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Player
 import io.musicassistant.companion.data.model.PlayerState
 import io.musicassistant.companion.data.model.Track
 import io.musicassistant.companion.ui.common.AlbumCard
+import io.musicassistant.companion.ui.common.MediaContextMenuItem
 import io.musicassistant.companion.ui.common.AnimatedSection
 import io.musicassistant.companion.ui.common.ArtistCard
 import io.musicassistant.companion.ui.common.RadioCard
@@ -60,7 +65,9 @@ fun HomeScreen(
         playerViewModel: PlayerViewModel,
         onAlbumClick: (String) -> Unit,
         onTrackClick: (Track) -> Unit,
-        onPlayerClick: (Player) -> Unit = {}
+        onPlayerClick: (Player) -> Unit = {},
+        onPlayerLongClick: (Player) -> Unit = {},
+        onMediaLongClick: (MediaContextMenuItem) -> Unit = {}
 ) {
     val players by playerViewModel.players.collectAsState()
     val recentlyPlayed by homeViewModel.recentlyPlayed.collectAsState()
@@ -71,6 +78,9 @@ fun HomeScreen(
     val favoriteTracks by homeViewModel.favoriteTracks.collectAsState()
     val favoriteRadios by homeViewModel.favoriteRadios.collectAsState()
     val isLoading by homeViewModel.isLoading.collectAsState()
+
+    val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            .compositeOver(MaterialTheme.colorScheme.background)
 
     Scaffold(
             topBar = {
@@ -84,10 +94,12 @@ fun HomeScreen(
                         },
                         colors =
                                 TopAppBarDefaults.topAppBarColors(
-                                        containerColor = Color.Transparent
-                                )
+                                        containerColor = topBarColor
+                                ),
+                        windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                 )
-            }
+            },
+            contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             // Gradient overlay at top
@@ -139,7 +151,8 @@ fun HomeScreen(
                                 items(players, key = { it.playerId }) { player ->
                                     PlayerCard(
                                             player = player,
-                                            onClick = { onPlayerClick(player) }
+                                            onClick = { onPlayerClick(player) },
+                                            onLongClick = { onPlayerLongClick(player) }
                                     )
                                 }
                             }
@@ -162,7 +175,8 @@ fun HomeScreen(
                                                     track.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
                                                     },
-                                            onClick = { onTrackClick(track) }
+                                            onClick = { onTrackClick(track) },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                     )
                                 }
                             }
@@ -185,7 +199,8 @@ fun HomeScreen(
                                                     album.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
                                                     },
-                                            onClick = { onAlbumClick(album.itemId) }
+                                            onClick = { onAlbumClick(album.itemId) },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(album.name, album.uri, MediaType.ALBUM)) }
                                     )
                                 }
                             }
@@ -205,7 +220,8 @@ fun HomeScreen(
                                                     track.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
                                                     },
-                                            onClick = { onTrackClick(track) }
+                                            onClick = { onTrackClick(track) },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                     )
                                 }
                             }
@@ -249,7 +265,8 @@ fun HomeScreen(
                                                     album.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
                                                     },
-                                            onClick = { onAlbumClick(album.itemId) }
+                                            onClick = { onAlbumClick(album.itemId) },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(album.name, album.uri, MediaType.ALBUM)) }
                                     )
                                 }
                             }
@@ -272,7 +289,8 @@ fun HomeScreen(
                                                     track.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
                                                     },
-                                            onClick = { onTrackClick(track) }
+                                            onClick = { onTrackClick(track) },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                     )
                                 }
                             }
@@ -294,7 +312,9 @@ fun HomeScreen(
                                             imageUrl =
                                                     radio.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
-                                                    }
+                                                    },
+                                            onClick = { playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play") },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(radio.name, radio.uri, MediaType.RADIO)) }
                                     )
                                 }
                             }
@@ -309,8 +329,9 @@ fun HomeScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PlayerCard(player: Player, onClick: () -> Unit) {
+private fun PlayerCard(player: Player, onClick: () -> Unit, onLongClick: () -> Unit = {}) {
     val stateColor =
             when (player.state) {
                 PlayerState.PLAYING -> MaterialTheme.colorScheme.primary
@@ -333,7 +354,10 @@ private fun PlayerCard(player: Player, onClick: () -> Unit) {
     ) {
         Column(
                 modifier =
-                        Modifier.clickable(onClick = onClick)
+                        Modifier.combinedClickable(
+                                onClick = onClick,
+                                onLongClick = onLongClick
+                        )
                                 .padding(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
         ) {

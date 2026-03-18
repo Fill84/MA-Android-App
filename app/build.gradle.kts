@@ -13,8 +13,8 @@ android {
         applicationId = "io.musicassistant.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "3.0.0"
+        versionCode = 6
+        versionName = "3.1.0"
     }
 
     signingConfigs {
@@ -70,10 +70,9 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
 
-    // Media3 for ExoPlayer, MediaSession, notification, lock screen controls
+    // Media3 for MediaSession, notification, lock screen controls (no ExoPlayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.common)
-    implementation(libs.androidx.media3.exoplayer)
 
     // Networking & serialization
     implementation(libs.okhttp)
@@ -81,6 +80,9 @@ dependencies {
 
     // Image loading with caching
     implementation(libs.coil.compose)
+
+    // Opus audio decoder (pure Java, no JNI)
+    implementation(libs.concentus)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

@@ -36,12 +36,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Radio
 import io.musicassistant.companion.data.model.Track
 import io.musicassistant.companion.ui.common.AlbumRow
+import io.musicassistant.companion.ui.common.MediaContextMenuItem
 import io.musicassistant.companion.ui.common.ArtistRow
 import io.musicassistant.companion.ui.common.EmptyState
 import io.musicassistant.companion.ui.common.PlaylistRow
@@ -56,7 +60,8 @@ fun SearchScreen(
         onAlbumClick: (String) -> Unit,
         onTrackClick: (Track) -> Unit,
         onPlaylistClick: (String) -> Unit,
-        onRadioClick: (Radio) -> Unit = {}
+        onRadioClick: (Radio) -> Unit = {},
+        onMediaLongClick: (MediaContextMenuItem) -> Unit = {}
 ) {
         val query by searchViewModel.query.collectAsState()
         val results by searchViewModel.results.collectAsState()
@@ -69,18 +74,34 @@ fun SearchScreen(
                         results.playlists.isNotEmpty() ||
                         results.radio.isNotEmpty()
 
+        val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                .compositeOver(MaterialTheme.colorScheme.background)
+
         Scaffold(
                 topBar = {
                         TopAppBar(
                                 title = { Text("Search", fontWeight = FontWeight.Bold) },
                                 colors =
                                         TopAppBarDefaults.topAppBarColors(
-                                                containerColor = MaterialTheme.colorScheme.surface
-                                        )
+                                                containerColor = topBarColor
+                                        ),
+                                windowInsets = androidx.compose.foundation.layout.WindowInsets(0)
                         )
-                }
+                },
+                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0)
         ) { innerPadding ->
-                Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                    Box(
+                            modifier = Modifier.fillMaxWidth().height(200.dp).background(
+                                    Brush.verticalGradient(
+                                            listOf(
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                                    MaterialTheme.colorScheme.background,
+                                            )
+                                    )
+                            )
+                    )
+                Column(modifier = Modifier.fillMaxSize()) {
                         TextField(
                                 value = query,
                                 onValueChange = { searchViewModel.onQueryChanged(it) },
@@ -157,6 +178,7 @@ fun SearchScreen(
                                                                 onClick = {
                                                                         onArtistClick(artist.itemId)
                                                                 },
+                                                                onLongClick = { onMediaLongClick(MediaContextMenuItem(artist.name, artist.uri, MediaType.ARTIST)) },
                                                                 imageSize = 44.dp
                                                         )
                                                 }
@@ -178,7 +200,8 @@ fun SearchScreen(
                                                                         },
                                                                 onClick = {
                                                                         onAlbumClick(album.itemId)
-                                                                }
+                                                                },
+                                                                onLongClick = { onMediaLongClick(MediaContextMenuItem(album.name, album.uri, MediaType.ALBUM)) }
                                                         )
                                                 }
                                         }
@@ -197,7 +220,8 @@ fun SearchScreen(
                                                                                                 it
                                                                                         )
                                                                         },
-                                                                onClick = { onTrackClick(track) }
+                                                                onClick = { onTrackClick(track) },
+                                                                onLongClick = { onMediaLongClick(MediaContextMenuItem(track.name, track.uri, MediaType.TRACK)) }
                                                         )
                                                 }
                                         }
@@ -222,6 +246,7 @@ fun SearchScreen(
                                                                                 playlist.itemId
                                                                         )
                                                                 },
+                                                                onLongClick = { onMediaLongClick(MediaContextMenuItem(playlist.name, playlist.uri, MediaType.PLAYLIST)) },
                                                                 imageSize = 44.dp
                                                         )
                                                 }
@@ -242,6 +267,7 @@ fun SearchScreen(
                                                                                         )
                                                                         },
                                                                 onClick = { onRadioClick(radio) },
+                                                                onLongClick = { onMediaLongClick(MediaContextMenuItem(radio.name, radio.uri, MediaType.RADIO)) },
                                                                 imageSize = 44.dp
                                                         )
                                                 }
@@ -250,6 +276,7 @@ fun SearchScreen(
                                         item { Spacer(modifier = Modifier.height(16.dp)) }
                                 }
                         }
+                }
                 }
         }
 }

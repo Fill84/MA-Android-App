@@ -38,12 +38,13 @@ class MaApi(private val client: MaApiClient) {
                 )
         }
 
-        suspend fun getPlayer(playerId: String): Player {
+        suspend fun getPlayer(playerId: String): Player? {
                 val result =
                         client.sendCommand(
                                 "players/get",
                                 mapOf("player_id" to JsonPrimitive(playerId))
                         )
+                if (result is kotlinx.serialization.json.JsonNull) return null
                 return json.decodeFromJsonElement(Player.serializer(), result)
         }
 
@@ -84,12 +85,13 @@ class MaApi(private val client: MaApiClient) {
 
         // ── Player Queue ────────────────────────────────────────
 
-        suspend fun getPlayerQueue(queueId: String): PlayerQueue {
+        suspend fun getPlayerQueue(queueId: String): PlayerQueue? {
                 val result =
                         client.sendCommand(
                                 "player_queues/get",
                                 mapOf("queue_id" to JsonPrimitive(queueId))
                         )
+                if (result is kotlinx.serialization.json.JsonNull) return null
                 return json.decodeFromJsonElement(PlayerQueue.serializer(), result)
         }
 

@@ -24,6 +24,9 @@ class SettingsRepository(private val context: Context) {
         val PLAYER_ID = stringPreferencesKey("player_id")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
         val USERNAME = stringPreferencesKey("username")
+        val PLAYER_NAME = stringPreferencesKey("player_name")
+        val CODEC_PREFERENCE = stringPreferencesKey("codec_preference")
+        val PLAYER_ENABLED = booleanPreferencesKey("player_enabled")
     }
 
     val settingsFlow: Flow<AppSettings> =
@@ -45,7 +48,10 @@ class SettingsRepository(private val context: Context) {
                                         ?: ThemeMode.DARK,
                         playerId = prefs[Keys.PLAYER_ID] ?: "",
                         authToken = prefs[Keys.AUTH_TOKEN] ?: "",
-                        username = prefs[Keys.USERNAME] ?: ""
+                        username = prefs[Keys.USERNAME] ?: "",
+                        playerName = prefs[Keys.PLAYER_NAME] ?: "",
+                        codecPreference = prefs[Keys.CODEC_PREFERENCE] ?: "OPUS",
+                        playerEnabled = prefs[Keys.PLAYER_ENABLED] ?: true
                 )
             }
 
@@ -94,5 +100,17 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPlayerId(id: String) {
         context.dataStore.edit { prefs -> prefs[Keys.PLAYER_ID] = id }
+    }
+
+    suspend fun setPlayerName(name: String) {
+        context.dataStore.edit { prefs -> prefs[Keys.PLAYER_NAME] = name }
+    }
+
+    suspend fun setCodecPreference(codec: String) {
+        context.dataStore.edit { prefs -> prefs[Keys.CODEC_PREFERENCE] = codec }
+    }
+
+    suspend fun setPlayerEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.PLAYER_ENABLED] = enabled }
     }
 }

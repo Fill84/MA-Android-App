@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,12 +18,14 @@ class ServerDiscovery(private val context: Context) {
     companion object {
         private const val TAG = "ServerDiscovery"
         private const val SERVICE_TYPE = "_mass._tcp."
+        private const val DISCOVERY_TIMEOUT_MS = 30_000L
     }
 
     private val nsdManager: NsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var isDiscovering = false
+    private var timeoutHandler: Handler? = null
 
     private val _servers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
     val servers: StateFlow<List<DiscoveredServer>> = _servers.asStateFlow()
@@ -71,6 +75,9 @@ class ServerDiscovery(private val context: Context) {
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
             isDiscovering = true
+            // Auto-stop discovery after timeout to save battery
+            timeoutHandler = Handler(Looper.getMainLooper())
+            timeoutHandler?.postDelayed({ stopDiscovery() }, DISCOVERY_TIMEOUT_MS)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start discovery", e)
         }
@@ -79,6 +86,8 @@ class ServerDiscovery(private val context: Context) {
     fun stopDiscovery() {
         if (!isDiscovering) return
 
+        timeoutHandler?.removeCallbacksAndMessages(null)
+        timeoutHandler = null
         try {
             nsdManager.stopServiceDiscovery(discoveryListener)
         } catch (e: Exception) {

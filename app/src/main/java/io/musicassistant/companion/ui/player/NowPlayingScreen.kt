@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,7 +76,8 @@ import kotlinx.coroutines.delay
 fun NowPlayingScreen(
         playerViewModel: PlayerViewModel,
         onBack: () -> Unit,
-        onOpenQueue: () -> Unit
+        onOpenQueue: () -> Unit,
+        onOpenPlayerSettings: (String) -> Unit = {}
 ) {
         val isPlaying by playerViewModel.isPlaying.collectAsState()
         val title by playerViewModel.currentTrackTitle.collectAsState()
@@ -399,6 +401,20 @@ fun NowPlayingScreen(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
                                 )
+                                val currentPlayer = player
+                                if (currentPlayer != null) {
+                                        IconButton(
+                                                onClick = { onOpenPlayerSettings(currentPlayer.playerId) },
+                                                modifier = Modifier.size(28.dp)
+                                        ) {
+                                                Icon(
+                                                        Icons.Default.Settings,
+                                                        contentDescription = "Player settings",
+                                                        modifier = Modifier.size(18.dp),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                        }
+                                }
                         }
 
                         Spacer(modifier = Modifier.height(24.dp))

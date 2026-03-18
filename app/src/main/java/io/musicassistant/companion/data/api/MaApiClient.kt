@@ -11,6 +11,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,9 +60,11 @@ class MaApiClient(private val httpClient: OkHttpClient) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var webSocket: WebSocket? = null
+    /** Monotonic generation counter — incremented on each connect() to detect stale callbacks. */
+    @Volatile private var wsGeneration = 0
     private var serverUrl: String = ""
     private var authToken: String? = null
-    private var shouldReconnect = false
+    @Volatile private var shouldReconnect = false
     private var backoffMs = INITIAL_BACKOFF_MS
 
     private val messageId = AtomicInteger(1)
@@ -117,7 +120,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
     /** Release all resources. */
     fun destroy() {
         disconnect()
-        scope.launch { /* allow pending coroutines to finish */}
+        scope.cancel()
     }
 
     /**
@@ -209,8 +212,9 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         val wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
         Log.d(TAG, "Connecting to $wsUrl")
 
+        val gen = ++wsGeneration
         val request = Request.Builder().url(wsUrl).build()
-        webSocket = httpClient.newWebSocket(request, WsListener())
+        webSocket = httpClient.newWebSocket(request, WsListener(gen))
     }
 
     private fun scheduleReconnect() {
@@ -274,7 +278,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         scope.launch {
             try {
                 if (!authToken.isNullOrEmpty()) {
-                    Log.d(TAG, "Sending auth with token (${authToken!!.take(10)}...)")
+                    Log.d(TAG, "Sending auth with token (redacted)")
                     val result =
                             sendCommand(
                                     "auth",
@@ -367,12 +371,16 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         scope.launch { _events.emit(MaEvent(event = event, objectId = objectId, data = data)) }
     }
 
-    private inner class WsListener : WebSocketListener() {
+    private inner class WsListener(private val gen: Int) : WebSocketListener() {
+        private fun isCurrent() = gen == wsGeneration
+
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (!isCurrent()) { webSocket.close(1000, "stale"); return }
             Log.d(TAG, "WebSocket opened")
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (!isCurrent()) return
             handleMessage(text)
         }
 
@@ -382,6 +390,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (!isCurrent()) { Log.d(TAG, "Ignoring stale onClosed (gen=$gen)"); return }
             Log.d(TAG, "WebSocket closed: $code $reason")
             _connectionState.value = ConnectionState.DISCONNECTED
             pendingRequests.forEach { (_, deferred) ->
@@ -392,6 +401,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            if (!isCurrent()) { Log.d(TAG, "Ignoring stale onFailure (gen=$gen)"); return }
             Log.e(TAG, "WebSocket failure: ${t.message}")
             _connectionState.value = ConnectionState.DISCONNECTED
             pendingRequests.forEach { (_, deferred) -> deferred.completeExceptionally(t) }

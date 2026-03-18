@@ -16,8 +16,11 @@ import io.musicassistant.companion.data.model.QueueItem
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.media.NativeMediaManager
 import io.musicassistant.companion.service.ServiceLocator
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
@@ -171,7 +174,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private fun loadQueue(queueId: String) {
         viewModelScope.launch {
             try {
-                _queue.value = api.getPlayerQueue(queueId)
+                _queue.value = api.getPlayerQueue(queueId) ?: return@launch
                 _queueItems.value = api.getPlayerQueueItems(queueId)
                 updateMetadataFromQueue()
             } catch (e: Exception) {
@@ -204,7 +207,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 if (changedId != null && !isAdded) {
                     // Use event data directly (avoids extra round-trip); fallback to fetch
-                    val updated = tryParsePlayer(event.data) ?: api.getPlayer(changedId)
+                    val updated = tryParsePlayer(event.data) ?: api.getPlayer(changedId) ?: return@launch
                     _players.value =
                             _players.value.map { if (it.playerId == changedId) updated else it }
                     if (_activePlayer.value?.playerId == changedId) {
@@ -249,7 +252,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val prevItemId = _queue.value?.currentItem?.queueItemId
                 // Use event data directly (avoids extra round-trip); fallback to fetch
-                val q = tryParsePlayerQueue(event.data) ?: api.getPlayerQueue(queueId)
+                val q = tryParsePlayerQueue(event.data) ?: api.getPlayerQueue(queueId) ?: return@launch
                 _queue.value = q
                 setIsPlayingFromServer(q.state == PlayerState.PLAYING)
 
@@ -452,6 +455,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private val _userMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
+
     fun deleteQueueItem(queueItemId: String) {
         val q = _queue.value ?: return
         viewModelScope.launch {
@@ -459,6 +465,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.queueDeleteItem(q.queueId, queueItemId)
             } catch (e: Exception) {
                 Log.e(TAG, "Delete queue item failed: ${e.message}")
+                _userMessage.tryEmit("Could not remove track from queue")
+            }
+        }
+    }
+
+    fun moveQueueItem(queueItemId: String, positionShift: Int) {
+        val q = _queue.value ?: return
+        viewModelScope.launch {
+            try {
+                api.queueMoveItem(q.queueId, queueItemId, positionShift)
+            } catch (e: Exception) {
+                Log.e(TAG, "Move queue item failed: ${e.message}")
             }
         }
     }
