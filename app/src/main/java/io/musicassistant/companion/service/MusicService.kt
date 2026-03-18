@@ -144,7 +144,9 @@ class MusicService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        mediaManager.initialize()
+        val browseCallback = ServiceLocator.getOrCreateAutoBrowseCallback()
+        browseCallback.appContext = applicationContext
+        mediaManager.initialize(browseCallback)
         wireMediaCallbacks()
         // Acquire WakeLock to prevent CPU throttling during background playback
         val pm = getSystemService(PowerManager::class.java)

@@ -8,6 +8,7 @@ import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.data.sendspin.SendspinConfig
 import io.musicassistant.companion.data.sendspin.audio.AudioStreamManager
 import io.musicassistant.companion.data.sendspin.audio.Codecs
+import io.musicassistant.companion.auto.AutoBrowseCallback
 import io.musicassistant.companion.media.NativeMediaManager
 import io.musicassistant.companion.media.StreamAudioPlayer
 import java.util.concurrent.TimeUnit
@@ -39,6 +40,18 @@ object ServiceLocator {
         private set
 
     @Volatile private var mediaManager: NativeMediaManager? = null
+
+    /** Shared browse callback for Android Auto. Created once by MusicService. */
+    @Volatile private var _autoBrowseCallback: AutoBrowseCallback? = null
+    val autoBrowseCallback: AutoBrowseCallback? get() = _autoBrowseCallback
+
+    fun getOrCreateAutoBrowseCallback(): AutoBrowseCallback {
+        return _autoBrowseCallback ?: synchronized(this) {
+            _autoBrowseCallback ?: AutoBrowseCallback(api, apiClient).also {
+                _autoBrowseCallback = it
+            }
+        }
+    }
 
     // Shared pipeline components — persist across reconnections
     @Volatile private var streamAudioPlayer: StreamAudioPlayer? = null

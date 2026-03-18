@@ -9,6 +9,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -61,7 +62,7 @@ class NativeMediaManager(private val context: android.content.Context) {
     // ── MediaSession ────────────────────────────────────────
 
     private var sessionPlayer: MaSessionPlayer? = null
-    var mediaSession: MediaSession? = null
+    var mediaSession: MediaLibraryService.MediaLibrarySession? = null
         private set
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -87,17 +88,19 @@ class NativeMediaManager(private val context: android.content.Context) {
 
     // ── Initialization ──────────────────────────────────────
 
-    fun initialize() {
+    fun initialize(browseCallback: MediaLibraryService.MediaLibrarySession.Callback? = null) {
         if (sessionPlayer != null) return
 
         val player = MaSessionPlayer(Looper.getMainLooper())
         sessionPlayer = player
 
-        mediaSession = MediaSession.Builder(context, player)
+        val callback = browseCallback ?: object : MediaLibraryService.MediaLibrarySession.Callback {}
+
+        mediaSession = MediaLibraryService.MediaLibrarySession.Builder(context, player, callback)
             .setId("MusicAssistant")
             .build()
 
-        Log.d(TAG, "Initialized SimpleBasePlayer and MediaSession")
+        Log.d(TAG, "Initialized SimpleBasePlayer and MediaLibrarySession")
     }
 
     // ── Streaming state control ─────────────────────────────
