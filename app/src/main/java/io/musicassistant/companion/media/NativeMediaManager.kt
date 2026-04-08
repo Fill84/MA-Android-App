@@ -85,6 +85,15 @@ class NativeMediaManager(private val context: android.content.Context) {
     // ── Metadata ────────────────────────────────────────────
 
     private var currentMetadata: MediaMetadata = MediaMetadata.EMPTY
+    private var prevMetadata: MediaMetadata = MediaMetadata.EMPTY
+    private var nextMetadata: MediaMetadata = MediaMetadata.EMPTY
+
+    /**
+     * Fallback artwork bytes (app icon) used when metadata has no embedded artwork.
+     * Bluetooth AVRCP can't resolve HTTP URIs, so we must always provide actual bytes.
+     * Set by MusicService at startup.
+     */
+    @Volatile var fallbackArtwork: ByteArray? = null
 
     // ── Initialization ──────────────────────────────────────
 
@@ -155,6 +164,15 @@ class NativeMediaManager(private val context: android.content.Context) {
         artworkUrl: String?,
         artworkData: ByteArray? = null
     ) {
+        // Skip if metadata is unchanged — avoids redundant MediaSession invalidations
+        // that cause Bluetooth AVRCP to continuously refresh its display.
+        val metadataChanged = title != _currentTrackTitle.value ||
+                artist != _currentTrackArtist.value ||
+                artworkUrl != _currentArtworkUri.value ||
+                artworkData != null
+
+        if (!metadataChanged) return
+
         _currentTrackTitle.value = title
         _currentTrackArtist.value = artist
         _currentArtworkUri.value = artworkUrl
@@ -173,6 +191,34 @@ class NativeMediaManager(private val context: android.content.Context) {
 
         currentMetadata = builder.build()
         postInvalidate()
+    }
+
+    /**
+     * Set metadata for the previous and next queue items so Bluetooth AVRCP
+     * displays distinct track info for each slot in the 3-item playlist.
+     * Called from MusicService alongside [updateMetadata].
+     */
+    fun updateQueueNeighborMetadata(
+        prevTitle: String?, prevArtist: String?,
+        nextTitle: String?, nextArtist: String?
+    ) {
+        prevMetadata = if (prevTitle != null || prevArtist != null) {
+            MediaMetadata.Builder()
+                .setTitle(prevTitle)
+                .setArtist(prevArtist)
+                .build()
+        } else {
+            MediaMetadata.EMPTY
+        }
+        nextMetadata = if (nextTitle != null || nextArtist != null) {
+            MediaMetadata.Builder()
+                .setTitle(nextTitle)
+                .setArtist(nextArtist)
+                .build()
+        } else {
+            MediaMetadata.EMPTY
+        }
+        // No postInvalidate() — called alongside updateMetadata which already invalidates.
     }
 
     fun updateArtworkData(artworkData: ByteArray) {
@@ -198,7 +244,7 @@ class NativeMediaManager(private val context: android.content.Context) {
 
     /**
      * Force MediaSession to re-read player state (duration, position, metadata).
-     * Call after updating duration/elapsed/metadata.
+     * Call sparingly — each invalidation triggers AVRCP updates to Bluetooth devices.
      */
     fun invalidateSessionState() {
         postInvalidate()
@@ -378,9 +424,23 @@ class NativeMediaManager(private val context: android.content.Context) {
         }
 
         private fun buildMediaItem(id: String): MediaItem {
+            val metadata = when (id) {
+                "prev" -> prevMetadata
+                "next" -> nextMetadata
+                else -> currentMetadata
+            }
+            // Bluetooth AVRCP can't resolve HTTP artworkUri — always provide bytes.
+            // Inject fallback (app icon) when metadata has no embedded artwork.
+            val effective = if (metadata.artworkData == null && fallbackArtwork != null) {
+                metadata.buildUpon()
+                    .setArtworkData(fallbackArtwork, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                    .build()
+            } else {
+                metadata
+            }
             return MediaItem.Builder()
                 .setMediaId(id)
-                .setMediaMetadata(currentMetadata)
+                .setMediaMetadata(effective)
                 .build()
         }
     }

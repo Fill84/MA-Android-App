@@ -38,7 +38,6 @@ class OkHttpSendspinTransport(
 
     companion object {
         private const val TAG = "OkHttpSendspinTransport"
-        private const val MAX_RECONNECT_ATTEMPTS = 10
     }
 
     private val supervisorJob = SupervisorJob()
@@ -83,7 +82,13 @@ class OkHttpSendspinTransport(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             Log.i(TAG, "WebSocket closed: $code $reason")
-            handleDisconnection()
+            if (!explicitDisconnect) {
+                Log.i(TAG, "Server closed connection, will reconnect")
+                _connectionState.value = WebSocketState.Reconnecting(reconnectAttempts)
+                attemptReconnect()
+            } else {
+                handleDisconnection()
+            }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -162,12 +167,15 @@ class OkHttpSendspinTransport(
     private fun attemptReconnect() {
         reconnectJob?.cancel()
         reconnectJob = launch {
-            for (attempt in 0 until MAX_RECONNECT_ATTEMPTS) {
+            var attempt = 0
+            while (!explicitDisconnect) {
                 reconnectAttempts = attempt + 1
-                Log.i(TAG, "Reconnect attempt $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS")
+                Log.i(TAG, "Reconnect attempt $reconnectAttempts")
                 _connectionState.value = WebSocketState.Reconnecting(reconnectAttempts)
 
                 delay(reconnectBackoffMs(attempt))
+
+                if (explicitDisconnect) break
 
                 try {
                     doConnect()
@@ -180,13 +188,10 @@ class OkHttpSendspinTransport(
                 } catch (e: Exception) {
                     Log.w(TAG, "Reconnect attempt $reconnectAttempts failed: ${e.message}")
                 }
-            }
 
-            Log.e(TAG, "Max reconnect attempts ($MAX_RECONNECT_ATTEMPTS) reached, giving up")
-            webSocket = null
-            _connectionState.value = WebSocketState.Error(
-                Exception("Failed to reconnect after $MAX_RECONNECT_ATTEMPTS attempts")
-            )
+                attempt++
+            }
+            handleDisconnection()
         }
     }
 

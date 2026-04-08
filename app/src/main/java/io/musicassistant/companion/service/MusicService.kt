@@ -88,6 +88,10 @@ class MusicService : LifecycleService() {
     // Current queue item ID — used to detect track changes
     private var currentQueueItemId: String? = null
 
+    // Cache previous track info for MediaSession prev/next metadata
+    private var previousTrackTitle: String? = null
+    private var previousTrackArtist: String? = null
+
     // WakeLock to prevent CPU throttling during background playback
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -147,6 +151,8 @@ class MusicService : LifecycleService() {
         val browseCallback = ServiceLocator.getOrCreateAutoBrowseCallback()
         browseCallback.appContext = applicationContext
         mediaManager.initialize(browseCallback)
+        // Pre-load app icon as fallback artwork for Bluetooth AVRCP
+        mediaManager.fallbackArtwork = getAppIconBytes()
         wireMediaCallbacks()
         // Acquire WakeLock to prevent CPU throttling during background playback
         val pm = getSystemService(PowerManager::class.java)
@@ -509,9 +515,18 @@ class MusicService : LifecycleService() {
                     }
                     else -> {}
                 }
+                // Only do full metadata update if the track changed.
+                // Same-track player_updated events (volume, state) don't need a
+                // metadata rebuild — that causes redundant MediaSession invalidations
+                // which make Bluetooth AVRCP continuously refresh its display.
                 val qId = activeQueueId ?: id
                 val q = ServiceLocator.api.getPlayerQueue(qId) ?: return@launch
-                updateMetadataFromQueue(q)
+                val prevItemId = currentQueueItemId
+                if (q.currentItem?.queueItemId != prevItemId) {
+                    updateMetadataFromQueue(q)
+                } else {
+                    updateElapsedTimeFromQueue(q)
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Failed to handle player_updated: ${e.message}")
@@ -579,10 +594,26 @@ class MusicService : LifecycleService() {
             queue: PlayerQueue,
             isRadio: Boolean
     ) {
+        // Update prev/next neighbor metadata for Bluetooth AVRCP display
+        val nextMedia = queue.nextItem?.mediaItem
+        val nextTitle = nextMedia?.name
+        val nextArtist = nextMedia?.artists?.joinToString(", ") { it.name }
+        val prevTitle = previousTrackTitle
+        val prevArtist = previousTrackArtist
+        mediaManager.updateQueueNeighborMetadata(
+            prevTitle = prevTitle,
+            prevArtist = prevArtist,
+            nextTitle = nextTitle,
+            nextArtist = nextArtist
+        )
+        // Cache current as previous for the next track change
+        previousTrackTitle = title
+        previousTrackArtist = artist
+
         val artworkImage = media.image ?: currentItem.image
         val artworkUrl = if (artworkImage != null) getImageUrl(artworkImage) else null
 
-        Log.d(TAG, "updateMetadata: title='$title' artist='$artist' isRadio=$isRadio")
+        Log.d(TAG, "updateMetadata: title='$title' artist='$artist' prev='$prevTitle' next='$nextTitle' isRadio=$isRadio")
 
         // Use cached artwork bytes if URL unchanged, otherwise download async
         val hasCachedArtwork = artworkUrl != null && artworkUrl == cachedArtworkUrl && cachedArtworkBytes != null
@@ -609,7 +640,8 @@ class MusicService : LifecycleService() {
                     cachedArtworkBytes = bytes
                     cachedArtworkBitmap = decodeToBitmap(bytes, 500, 500)
                     mediaManager.updateArtworkData(bytes)
-                    mediaManager.invalidateSessionState()
+                    // updateArtworkData already calls postInvalidate() —
+                    // no need for a separate invalidateSessionState() here.
                     updateNotification()
                 }
             }
