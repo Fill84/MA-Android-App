@@ -85,4 +85,9 @@ dependencies {
     implementation(libs.concentus)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    testImplementation(libs.junit4)
+    testImplementation(libs.mockk)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.turbine)
 }
