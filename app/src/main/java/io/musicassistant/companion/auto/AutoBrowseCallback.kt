@@ -3,8 +3,10 @@ package io.musicassistant.companion.auto
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -55,6 +57,53 @@ class AutoBrowseCallback(
 
     private val isConnected: Boolean
         get() = apiClient.connectionState.value == ConnectionState.AUTHENTICATED
+
+    // ── Connection ──────────────────────────────────────────
+
+    override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo
+    ): MediaSession.ConnectionResult {
+        Log.d(TAG, "Controller connected: ${controller.packageName}")
+        // Grant all session commands (browsing + library) and all player commands.
+        // Bluetooth AVRCP needs SEEK_TO_MEDIA_ITEM for playlist item selection.
+        return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS)
+                .setAvailablePlayerCommands(
+                    Player.Commands.Builder().addAllCommands().build())
+                .build()
+    }
+
+    /** Callbacks for next/previous — wired by MusicService. */
+    var onNextRequested: (() -> Unit)? = null
+    var onPreviousRequested: (() -> Unit)? = null
+
+    override fun onMediaButtonEvent(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+            intent: android.content.Intent
+    ): Boolean {
+        val keyEvent = intent.getParcelableExtra<KeyEvent>(android.content.Intent.EXTRA_KEY_EVENT)
+        Log.d(TAG, "onMediaButtonEvent: action=${intent.action} keyCode=${keyEvent?.keyCode} keyAction=${keyEvent?.action} from=${controllerInfo.packageName}")
+
+        // Only handle key-down events (ignore key-up to avoid double-fire)
+        if (keyEvent?.action == KeyEvent.ACTION_DOWN) {
+            when (keyEvent.keyCode) {
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    Log.d(TAG, "Media button → NEXT")
+                    onNextRequested?.invoke()
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    Log.d(TAG, "Media button → PREVIOUS")
+                    onPreviousRequested?.invoke()
+                    return true
+                }
+            }
+        }
+        return super.onMediaButtonEvent(session, controllerInfo, intent)
+    }
 
     // ── Root ────────────────────────────────────────────────
 
@@ -249,16 +298,28 @@ class AutoBrowseCallback(
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>
     ): ListenableFuture<MutableList<MediaItem>> {
-        // When user taps a playable item in Android Auto, trigger playback via MA API
+        Log.d(TAG, "onAddMediaItems: ${mediaItems.map { it.mediaId }} from=${controller.packageName}")
         val ctx = appContext
         if (ctx != null) {
             for (item in mediaItems) {
-                playMediaId(item.mediaId, ctx)
+                when (item.mediaId) {
+                    // Playlist items from our 3-item now-playing list (prev/current/next)
+                    // BMW AVRCP sends these when user selects an item from the playlist view
+                    "next" -> {
+                        Log.d(TAG, "Playlist selection → NEXT")
+                        onNextRequested?.invoke()
+                    }
+                    "prev" -> {
+                        Log.d(TAG, "Playlist selection → PREVIOUS")
+                        onPreviousRequested?.invoke()
+                    }
+                    "current" -> {
+                        Log.d(TAG, "Playlist selection → CURRENT (ignored)")
+                    }
+                    else -> playMediaId(item.mediaId, ctx)
+                }
             }
         }
-
-        // Return the items as-is — SimpleBasePlayer doesn't actually play them
-        // The MA server handles playback via Sendspin
         return Futures.immediateFuture(mediaItems)
     }
 

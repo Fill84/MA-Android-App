@@ -1,5 +1,6 @@
 package io.musicassistant.companion.media
 
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -9,8 +10,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.session.MediaLibraryService
-import androidx.media3.session.MediaSession
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import io.musicassistant.companion.data.model.PlayerState
@@ -105,11 +106,34 @@ class NativeMediaManager(private val context: android.content.Context) {
 
         val callback = browseCallback ?: object : MediaLibraryService.MediaLibrarySession.Callback {}
 
+        // Explicit BitmapLoader that decodes artworkData bytes to Bitmap.
+        // Media3 uses this to bridge artwork to the legacy MediaSession's
+        // METADATA_KEY_ALBUM_ART bitmap, which Bluetooth AVRCP reads.
+        val bitmapLoader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String): Boolean = true
+
+            override fun decodeBitmap(data: ByteArray): ListenableFuture<android.graphics.Bitmap> {
+                val bmp = BitmapFactory.decodeByteArray(data, 0, data.size)
+                Log.d(TAG, "BitmapLoader.decodeBitmap: ${data.size} bytes → ${bmp?.width}x${bmp?.height}")
+                return if (bmp != null) {
+                    Futures.immediateFuture(bmp)
+                } else {
+                    Futures.immediateFailedFuture(IllegalArgumentException("Failed to decode artwork"))
+                }
+            }
+
+            override fun loadBitmap(uri: Uri): ListenableFuture<android.graphics.Bitmap> {
+                Log.d(TAG, "BitmapLoader.loadBitmap: uri=$uri (not supported)")
+                return Futures.immediateFailedFuture(UnsupportedOperationException("URI loading not supported"))
+            }
+        }
+
         mediaSession = MediaLibraryService.MediaLibrarySession.Builder(context, player, callback)
             .setId("MusicAssistant")
+            .setBitmapLoader(bitmapLoader)
             .build()
 
-        Log.d(TAG, "Initialized SimpleBasePlayer and MediaLibrarySession")
+        Log.d(TAG, "Initialized SimpleBasePlayer and MediaLibrarySession with BitmapLoader")
     }
 
     // ── Streaming state control ─────────────────────────────
@@ -173,6 +197,12 @@ class NativeMediaManager(private val context: android.content.Context) {
 
         if (!metadataChanged) return
 
+        // Preserve existing artwork bytes when URL is unchanged and no new bytes provided.
+        // Without this, Sendspin metadata updates (which never include artworkData) would
+        // discard previously downloaded artwork and cause fallback icon to appear.
+        val effectiveArtworkData = artworkData
+            ?: if (artworkUrl == _currentArtworkUri.value) currentMetadata.artworkData else null
+
         _currentTrackTitle.value = title
         _currentTrackArtist.value = artist
         _currentArtworkUri.value = artworkUrl
@@ -182,14 +212,19 @@ class NativeMediaManager(private val context: android.content.Context) {
             .setArtist(artist)
             .setAlbumTitle(album)
 
-        if (artworkUrl != null) {
+        // For Bluetooth AVRCP: only set artworkData bytes, NOT artworkUri.
+        // If both are set, the platform MediaSession may prefer the URI (which BT can't resolve)
+        // over the embedded bitmap. By only setting artworkData, Media3 converts it to a Bitmap
+        // in the legacy MediaSession metadata (METADATA_KEY_ALBUM_ART) which AVRCP can read.
+        if (effectiveArtworkData != null) {
+            builder.setArtworkData(effectiveArtworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+        } else if (artworkUrl != null) {
+            // Only set URI as fallback when we have no bytes at all
             builder.setArtworkUri(Uri.parse(artworkUrl))
-        }
-        if (artworkData != null) {
-            builder.setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
         }
 
         currentMetadata = builder.build()
+        Log.d(TAG, "updateMetadata: title=$title hasArtwork=${effectiveArtworkData != null} size=${effectiveArtworkData?.size}")
         postInvalidate()
     }
 
@@ -325,6 +360,7 @@ class NativeMediaManager(private val context: android.content.Context) {
                 .addAll(
                     Player.COMMAND_PLAY_PAUSE,
                     Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_TO_MEDIA_ITEM,  // Required for AVRCP playlist item selection
                     Player.COMMAND_SEEK_TO_NEXT,
                     Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
                     Player.COMMAND_SEEK_TO_PREVIOUS,
@@ -379,6 +415,7 @@ class NativeMediaManager(private val context: android.content.Context) {
         }
 
         override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
+            Log.d(TAG, "handleSetPlayWhenReady: $playWhenReady (streamActive=$streamActive)")
             // Optimistically update state so getState() returns the right value
             // when SimpleBasePlayer calls it after the future resolves.
             if (streamActive) {
@@ -401,21 +438,30 @@ class NativeMediaManager(private val context: android.content.Context) {
             positionMs: Long,
             @Player.Command seekCommand: Int
         ): ListenableFuture<*> {
+            Log.d(TAG, "handleSeek: index=$mediaItemIndex pos=$positionMs cmd=$seekCommand")
             when (seekCommand) {
                 Player.COMMAND_SEEK_TO_NEXT,
                 Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                    Log.d(TAG, "handleSeek → NEXT")
                     onNextRequested?.invoke()
                 }
                 Player.COMMAND_SEEK_TO_PREVIOUS,
                 Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                    Log.d(TAG, "handleSeek → PREVIOUS")
                     onPreviousRequested?.invoke()
                 }
                 else -> {
+                    // COMMAND_SEEK_TO_MEDIA_ITEM or COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM:
+                    // Determine next/prev/seek based on the target media item index.
+                    // Index 0 = prev, 1 = current, 2 = next in our 3-item playlist.
                     if (mediaItemIndex > 1) {
+                        Log.d(TAG, "handleSeek → NEXT (index=$mediaItemIndex)")
                         onNextRequested?.invoke()
                     } else if (mediaItemIndex < 1) {
+                        Log.d(TAG, "handleSeek → PREVIOUS (index=$mediaItemIndex)")
                         onPreviousRequested?.invoke()
                     } else {
+                        Log.d(TAG, "handleSeek → SEEK to $positionMs ms")
                         onSeekRequested?.invoke(positionMs)
                     }
                 }

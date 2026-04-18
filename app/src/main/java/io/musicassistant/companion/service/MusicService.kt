@@ -27,6 +27,7 @@ import io.musicassistant.companion.data.model.PlayerState
 import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.data.sendspin.SendspinState
 import io.musicassistant.companion.data.settings.SettingsModule
+import io.musicassistant.companion.media.ArtworkConverter
 import io.musicassistant.companion.media.NativeMediaManager
 import android.os.SystemClock
 import java.util.concurrent.ConcurrentHashMap
@@ -150,6 +151,8 @@ class MusicService : LifecycleService() {
         createNotificationChannel()
         val browseCallback = ServiceLocator.getOrCreateAutoBrowseCallback()
         browseCallback.appContext = applicationContext
+        browseCallback.onNextRequested = { handleNext() }
+        browseCallback.onPreviousRequested = { handlePrevious() }
         mediaManager.initialize(browseCallback)
         // Pre-load app icon as fallback artwork for Bluetooth AVRCP
         mediaManager.fallbackArtwork = getAppIconBytes()
@@ -191,6 +194,8 @@ class MusicService : LifecycleService() {
         mediaManager.onNextRequested = null
         mediaManager.onPreviousRequested = null
         mediaManager.onSeekRequested = null
+        ServiceLocator.autoBrowseCallback?.onNextRequested = null
+        ServiceLocator.autoBrowseCallback?.onPreviousRequested = null
         if (wakeLock?.isHeld == true) wakeLock?.release()
         apiClient.disconnect()
         lifecycleScope.launch { ServiceLocator.sendspinClient?.stop() }
@@ -332,11 +337,15 @@ class MusicService : LifecycleService() {
     }
 
     private fun handleNext() {
-        val id = activePlayerId ?: return
+        val id = activePlayerId
+        Log.d(TAG, "handleNext called, activePlayerId=$id")
+        if (id == null) return
         markCommandPending("next")
         lifecycleScope.launch {
             try {
+                Log.d(TAG, "Sending playerNext($id)")
                 ServiceLocator.api.playerNext(id)
+                Log.d(TAG, "playerNext($id) succeeded")
             } catch (e: Exception) {
                 Log.e(TAG, "Next failed: ${e.message}")
             }
@@ -344,11 +353,15 @@ class MusicService : LifecycleService() {
     }
 
     private fun handlePrevious() {
-        val id = activePlayerId ?: return
+        val id = activePlayerId
+        Log.d(TAG, "handlePrevious called, activePlayerId=$id")
+        if (id == null) return
         markCommandPending("previous")
         lifecycleScope.launch {
             try {
+                Log.d(TAG, "Sending playerPrevious($id)")
                 ServiceLocator.api.playerPrevious(id)
+                Log.d(TAG, "playerPrevious($id) succeeded")
             } catch (e: Exception) {
                 Log.e(TAG, "Previous failed: ${e.message}")
             }
@@ -408,7 +421,9 @@ class MusicService : LifecycleService() {
             }
             .launchIn(lifecycleScope)
 
-        // Observe metadata from Sendspin stream (alternative to API events)
+        // Observe metadata from Sendspin stream (e.g. radio track changes).
+        // Sendspin metadata never includes artwork bytes, but updateMetadata()
+        // preserves existing artworkData when artworkUrl is unchanged.
         client.metadata
             .onEach { metadata ->
                 if (metadata != null && (metadata.title != null || metadata.artist != null)) {
@@ -556,36 +571,41 @@ class MusicService : LifecycleService() {
 
         val isRadio = media.mediaType == MediaType.RADIO
 
-        // For radio: prefer the player's current_media
-        val title: String
-        val artist: String
-        val album: String?
-        if (isRadio) {
-            // Fetch player for current_media (radio has actual track in there)
-            lifecycleScope.launch {
-                try {
+        // Always run in a coroutine so we can download artwork before pushing metadata.
+        // Bluetooth AVRCP caches metadata per track and may not refresh on later updates,
+        // so we must include artwork bytes in the FIRST metadata push.
+        lifecycleScope.launch {
+            val title: String
+            val artist: String
+            val album: String?
+
+            if (isRadio) {
+                val radioMeta = try {
                     val player = ServiceLocator.api.getPlayer(activePlayerId ?: return@launch)
                     val pmTitle = player?.currentMedia?.title?.takeIf { it.isNotBlank() }
                     val pmArtist = player?.currentMedia?.artist?.takeIf { it.isNotBlank() }
-                    val t = pmTitle ?: currentItem.name.ifBlank { media.name }
-                    val a = pmArtist ?: media.name
-                    val alb = player?.currentMedia?.album ?: media.name
-                    applyMetadata(t, a, alb, media, currentItem, queue, isRadio)
+                    Triple(
+                        pmTitle ?: currentItem.name.ifBlank { media.name },
+                        pmArtist ?: media.name,
+                        player?.currentMedia?.album ?: media.name
+                    )
                 } catch (e: Exception) {
-                    // Fallback to queue media info
-                    val t = currentItem.name.ifBlank { media.name }
-                    applyMetadata(t, media.name, media.name, media, currentItem, queue, isRadio)
+                    Triple(currentItem.name.ifBlank { media.name }, media.name, media.name)
                 }
+                title = radioMeta.first
+                artist = radioMeta.second
+                album = radioMeta.third
+            } else {
+                title = media.name
+                artist = media.artists.joinToString(", ") { it.name }
+                album = media.album?.name
             }
-        } else {
-            title = media.name
-            artist = media.artists.joinToString(", ") { it.name }
-            album = media.album?.name
+
             applyMetadata(title, artist, album, media, currentItem, queue, isRadio)
         }
     }
 
-    private fun applyMetadata(
+    private suspend fun applyMetadata(
             title: String,
             artist: String,
             album: String?,
@@ -613,39 +633,50 @@ class MusicService : LifecycleService() {
         val artworkImage = media.image ?: currentItem.image
         val artworkUrl = if (artworkImage != null) getImageUrl(artworkImage) else null
 
-        Log.d(TAG, "updateMetadata: title='$title' artist='$artist' prev='$prevTitle' next='$nextTitle' isRadio=$isRadio")
+        Log.d(TAG, "applyMetadata: title='$title' artist='$artist' prev='$prevTitle' next='$nextTitle' nextItem=${queue.nextItem != null} isRadio=$isRadio artwork=$artworkUrl")
 
-        // Use cached artwork bytes if URL unchanged, otherwise download async
+        // Download artwork BEFORE pushing to MediaSession.
+        // Bluetooth AVRCP caches metadata per track — if we push without artwork first,
+        // the car head unit may never show the cover art even after a later update.
         val hasCachedArtwork = artworkUrl != null && artworkUrl == cachedArtworkUrl && cachedArtworkBytes != null
-        // Ensure bitmap exists when using cached artwork bytes
-        if (hasCachedArtwork && cachedArtworkBitmap == null && cachedArtworkBytes != null) {
-            cachedArtworkBitmap = decodeToBitmap(cachedArtworkBytes!!, 500, 500)
+        val artworkBytes: ByteArray?
+        if (hasCachedArtwork) {
+            artworkBytes = cachedArtworkBytes
+            if (cachedArtworkBitmap == null && cachedArtworkBytes != null) {
+                cachedArtworkBitmap = decodeToBitmap(cachedArtworkBytes!!, 500, 500)
+            }
+        } else {
+            // Download artwork synchronously (within this coroutine) before pushing metadata
+            val downloaded = if (artworkUrl != null) downloadArtwork(artworkUrl) else null
+            artworkBytes = downloaded ?: getAppIconBytes()
+            if (artworkBytes != null) {
+                cachedArtworkUrl = artworkUrl
+                cachedArtworkBytes = artworkBytes
+                cachedArtworkBitmap = decodeToBitmap(artworkBytes, 500, 500)
+            }
+            Log.d(TAG, "applyMetadata: artwork downloaded=${downloaded != null} fallback=${downloaded == null && artworkBytes != null} size=${artworkBytes?.size}")
         }
 
+        // Convert to 300x300 JPEG for Bluetooth AVRCP compatibility.
+        // AVRCP has size limits and JPEG is the most compatible format.
+        val jpegBytes = if (artworkBytes != null) {
+            ArtworkConverter.toJpeg(artworkBytes) ?: artworkBytes
+        } else {
+            null
+        }
+
+        // Push metadata with artwork bytes to MediaSession.
+        // Media3's BitmapLoader decodes artworkData to a Bitmap and sets it as
+        // METADATA_KEY_ALBUM_ART on the legacy MediaSession — which AVRCP reads.
+        // Do NOT set artworkUri — if both are set, some controllers prefer the URI
+        // (which BT can't resolve) over the embedded bitmap.
         mediaManager.updateMetadata(
                 title = title,
                 artist = artist,
                 album = album,
                 artworkUrl = artworkUrl,
-                artworkData = if (hasCachedArtwork) cachedArtworkBytes else null
+                artworkData = jpegBytes
         )
-
-        // Download artwork bitmap for Bluetooth/AVRCP (can't resolve HTTP URLs)
-        if (!hasCachedArtwork) {
-            lifecycleScope.launch {
-                val artworkBytes = if (artworkUrl != null) downloadArtwork(artworkUrl) else null
-                val bytes = artworkBytes ?: getAppIconBytes()
-                if (bytes != null) {
-                    cachedArtworkUrl = artworkUrl
-                    cachedArtworkBytes = bytes
-                    cachedArtworkBitmap = decodeToBitmap(bytes, 500, 500)
-                    mediaManager.updateArtworkData(bytes)
-                    // updateArtworkData already calls postInvalidate() —
-                    // no need for a separate invalidateSessionState() here.
-                    updateNotification()
-                }
-            }
-        }
 
         // Duration: for live content, reset to TIME_UNSET
         if (currentItem.duration > 0 && !isRadio) {
@@ -661,6 +692,7 @@ class MusicService : LifecycleService() {
 
         // Force MediaSession to re-read state
         mediaManager.invalidateSessionState()
+        updateNotification()
     }
 
     /** Lightweight update — only elapsed time, no metadata rebuild. */
@@ -677,14 +709,24 @@ class MusicService : LifecycleService() {
     /** Download artwork image bytes for embedding in MediaSession metadata. */
     private suspend fun downloadArtwork(url: String): ByteArray? = withContext(Dispatchers.IO) {
         try {
+            val token = apiClient.currentAuthToken
+            Log.d(TAG, "Downloading artwork: $url (hasToken=${!token.isNullOrEmpty()})")
             val request = okhttp3.Request.Builder().url(url).apply {
-                val token = apiClient.currentAuthToken
                 if (!token.isNullOrEmpty()) {
                     addHeader("Authorization", "Bearer $token")
                 }
             }.build()
             val response = ServiceLocator.httpClient.newCall(request).execute()
-            response.use { if (it.isSuccessful) it.body?.bytes() else null }
+            response.use {
+                if (it.isSuccessful) {
+                    val bytes = it.body?.bytes()
+                    Log.d(TAG, "Artwork downloaded: ${bytes?.size ?: 0} bytes")
+                    bytes
+                } else {
+                    Log.w(TAG, "Artwork download failed: HTTP ${it.code} ${it.message}")
+                    null
+                }
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to download artwork: ${e.message}")
             null
