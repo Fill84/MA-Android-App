@@ -127,6 +127,28 @@ class ArtworkPipelineTest {
         assertNull(result)
     }
 
+    @Test
+    fun `fetch adds Authorization header when token provided`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(pngBytes())))
+        val pipeline = ArtworkPipeline(client, ioDispatcher = dispatcher, authTokenProvider = { "tok123" })
+        pipeline.fetch(server.url("/img.png").toString())
+        advanceUntilIdle()
+        val recorded = server.takeRequest()
+        assertEquals("Bearer tok123", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `fetch sends no Authorization header without a token`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(pngBytes())))
+        val pipeline = ArtworkPipeline(client, ioDispatcher = dispatcher)
+        pipeline.fetch(server.url("/img.png").toString())
+        advanceUntilIdle()
+        val recorded = server.takeRequest()
+        assertNull(recorded.getHeader("Authorization"))
+    }
+
     // Minimal valid 1x1 PNG (well-known bytes).
     private fun pngBytes(): ByteArray = byteArrayOf(
         0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,

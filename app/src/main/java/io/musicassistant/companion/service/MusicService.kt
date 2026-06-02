@@ -6,9 +6,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -27,31 +29,29 @@ import io.musicassistant.companion.data.model.PlayerState
 import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.data.sendspin.SendspinState
 import io.musicassistant.companion.data.settings.SettingsModule
-import io.musicassistant.companion.media.ArtworkConverter
-import io.musicassistant.companion.media.NativeMediaManager
-import android.os.SystemClock
+import io.musicassistant.companion.media.MaPlayer
+import io.musicassistant.companion.media.MediaMetadataCoordinator
+import io.musicassistant.companion.media.MediaSessionHost
+import io.musicassistant.companion.media.TrackMetadata
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 
 /**
  * Foreground service that manages the connection to the MA server and audio playback.
  *
- * Key improvements over the old PlayerService:
- * - No WebView, no wake lock, no JS timer polling
- * - Only runs as foreground service during active playback
- * - Event-driven via WebSocket (no polling)
- * - Uses LifecycleService for structured coroutine management
+ * The media surface (notification, lock screen, Bluetooth AVRCP, Android Auto) is driven by the
+ * [MediaMetadataCoordinator] → [MaPlayer] → [MediaSessionHost] stack (all shared singletons in
+ * [ServiceLocator]). This service only feeds MA/Sendspin events into the Coordinator and routes
+ * transport commands back out to the MA API. It owns no artwork cache and decodes no bitmaps for
+ * the session — the Coordinator/ArtworkPipeline are the single source of truth for cover bytes.
  */
 class MusicService : LifecycleService() {
 
@@ -68,9 +68,15 @@ class MusicService : LifecycleService() {
         const val ACTION_PREVIOUS = "io.musicassistant.companion.PREVIOUS"
     }
 
-    // Shared instances (application-scoped singletons)
     val apiClient: MaApiClient by lazy { ServiceLocator.apiClient }
-    val mediaManager: NativeMediaManager by lazy { ServiceLocator.getMediaManager(this) }
+
+    // New media stack (shared singletons)
+    private lateinit var coordinator: MediaMetadataCoordinator
+    private lateinit var mediaPlayer: MaPlayer
+    private lateinit var mediaSessionHost: MediaSessionHost
+
+    /** Logical play/pause state for the notification. */
+    private val playingState = MutableStateFlow(false)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -89,7 +95,7 @@ class MusicService : LifecycleService() {
     // Current queue item ID — used to detect track changes
     private var currentQueueItemId: String? = null
 
-    // Cache previous track info for MediaSession prev/next metadata
+    // Cache previous track info for MediaSession prev metadata (PlayerQueue has no previousItem).
     private var previousTrackTitle: String? = null
     private var previousTrackArtist: String? = null
 
@@ -97,19 +103,14 @@ class MusicService : LifecycleService() {
     private var wakeLock: PowerManager.WakeLock? = null
 
     // ── Command-Echo Guard ──────────────────────────────────
-    // Prevents server event echoes from re-triggering local actions after we send a command.
-    // When we send play/pause/next/prev, we record it here. When the server echoes the state
-    // change back via player_updated, we check if it matches a pending command and skip it.
     private data class PendingCommand(val action: String, val timestamp: Long)
     private val pendingCommands = ConcurrentHashMap<String, PendingCommand>()
     private val COMMAND_ECHO_WINDOW_MS = 3000L
 
-    /** Mark that we sent a command, so we can ignore the server echo. */
     private fun markCommandPending(action: String) {
         pendingCommands[action] = PendingCommand(action, SystemClock.elapsedRealtime())
     }
 
-    /** Check if a state change from the server is our own echo. Returns true = ignore it. */
     private fun isCommandEcho(action: String): Boolean {
         val pending = pendingCommands.remove(action) ?: return false
         val isEcho = (SystemClock.elapsedRealtime() - pending.timestamp) < COMMAND_ECHO_WINDOW_MS
@@ -118,50 +119,52 @@ class MusicService : LifecycleService() {
     }
 
     // ── Sendspin Reconnect Grace Period ────────────────────
-    // When Sendspin WebSocket closes and reconnects, the player briefly disappears from MA.
-    // During this window, ignore player_updated events that would falsely pause playback.
     @Volatile private var sendspinDisconnectedAt: Long = 0L
     private val SENDSPIN_RECONNECT_GRACE_MS = 5000L
 
-    /** Check if Sendspin is currently reconnecting (within grace period). */
     private fun isSendspinReconnecting(): Boolean {
         val client = ServiceLocator.sendspinClient ?: return false
         val state = client.state.value
         if (state is SendspinState.Ready || state is SendspinState.Synchronized) {
-            // Already reconnected — check if it was very recent
             val elapsed = SystemClock.elapsedRealtime() - sendspinDisconnectedAt
-            return elapsed < 2000L // 2s grace after re-registration
+            return elapsed < 2000L
         }
         return state is SendspinState.Reconnecting && sendspinDisconnectedAt > 0L
     }
 
-    // Notification state cache to avoid unnecessary rebuilds
+    // Notification dedup state
     private var lastNotifTitle: String? = null
     private var lastNotifArtist: String? = null
     private var lastNotifIsPlaying: Boolean = false
-
-    // Artwork cache — avoids re-download on play/pause state changes
-    private var cachedArtworkUrl: String? = null
-    private var cachedArtworkBytes: ByteArray? = null
-    private var cachedArtworkBitmap: android.graphics.Bitmap? = null
-    private var lastNotifArtworkUrl: String? = null
+    private var lastArtBytes: ByteArray? = null
+    private var lastArtBitmap: android.graphics.Bitmap? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+
         val browseCallback = ServiceLocator.getOrCreateAutoBrowseCallback()
         browseCallback.appContext = applicationContext
+        // Hardware media keys (AVRCP passthrough) still route through the browse callback.
         browseCallback.onNextRequested = { handleNext() }
         browseCallback.onPreviousRequested = { handlePrevious() }
-        mediaManager.initialize(browseCallback)
-        // Pre-load app icon as fallback artwork for Bluetooth AVRCP
-        mediaManager.fallbackArtwork = getAppIconBytes()
-        wireMediaCallbacks()
-        // Acquire WakeLock to prevent CPU throttling during background playback
+
+        coordinator = ServiceLocator.getCoordinator(this)
+        mediaPlayer = ServiceLocator.getMediaPlayer(this)
+        mediaSessionHost = ServiceLocator.getMediaSessionHost(this)
+        mediaPlayer.startObservingSnapshot(lifecycleScope)
+
+        // Route transport commands from the session out to the MA API.
+        mediaPlayer.onPlayRequested = { handlePlay() }
+        mediaPlayer.onPauseRequested = { handlePause() }
+        mediaPlayer.onNextRequested = { handleNext() }
+        mediaPlayer.onPreviousRequested = { handlePrevious() }
+        mediaPlayer.onSeekRequested = { positionMs -> handleSeek(positionMs) }
+
         val pm = getSystemService(PowerManager::class.java)
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MusicAssistant::Playback")
         wakeLock?.acquire(4 * 60 * 60 * 1000L) // 4-hour timeout safety net
-        // Start foreground immediately so the service survives in background
+
         startForeground()
         observePlaybackState()
         Log.d(TAG, "MusicService created")
@@ -169,7 +172,6 @@ class MusicService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-
         when (intent?.action) {
             ACTION_START -> startConnection()
             ACTION_STOP -> stopSelf()
@@ -178,28 +180,27 @@ class MusicService : LifecycleService() {
             ACTION_NEXT -> handleNext()
             ACTION_PREVIOUS -> handlePrevious()
         }
-
         return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // Keep running in the background — don't stop the service
         Log.d(TAG, "Task removed, service continues running")
     }
 
     override fun onDestroy() {
-        mediaManager.onPlayRequested = null
-        mediaManager.onPauseRequested = null
-        mediaManager.onNextRequested = null
-        mediaManager.onPreviousRequested = null
-        mediaManager.onSeekRequested = null
+        mediaPlayer.onPlayRequested = null
+        mediaPlayer.onPauseRequested = null
+        mediaPlayer.onNextRequested = null
+        mediaPlayer.onPreviousRequested = null
+        mediaPlayer.onSeekRequested = null
         ServiceLocator.autoBrowseCallback?.onNextRequested = null
         ServiceLocator.autoBrowseCallback?.onPreviousRequested = null
         if (wakeLock?.isHeld == true) wakeLock?.release()
         apiClient.disconnect()
         lifecycleScope.launch { ServiceLocator.sendspinClient?.stop() }
-        mediaManager.release()
+        mediaPlayer.stopObservingSnapshot()
+        ServiceLocator.releaseMediaStack()
         Log.d(TAG, "MusicService destroyed")
         super.onDestroy()
     }
@@ -216,17 +217,15 @@ class MusicService : LifecycleService() {
 
             val token = settings.authToken.ifEmpty { null }
 
-            // Ensure we have a player ID
             val playerId =
-                    settings.playerId.ifEmpty {
-                        val newId = SendspinClient.generatePlayerId()
-                        SettingsModule.getRepository(this@MusicService).setPlayerId(newId)
-                        newId
-                    }
+                settings.playerId.ifEmpty {
+                    val newId = SendspinClient.generatePlayerId()
+                    SettingsModule.getRepository(this@MusicService).setPlayerId(newId)
+                    newId
+                }
             activePlayerId = playerId
-            activeQueueId = playerId  // Default: queue ID == player ID; updated by events
+            activeQueueId = playerId
 
-            // Already connected — skip reconnection to avoid disrupting active playback
             val existingClient = ServiceLocator.sendspinClient
             if (apiClient.connectionState.value == ConnectionState.AUTHENTICATED &&
                 existingClient != null &&
@@ -237,12 +236,10 @@ class MusicService : LifecycleService() {
                 return@launch
             }
 
-            // Connect API client (only if not already authenticated)
             if (apiClient.connectionState.value != ConnectionState.AUTHENTICATED) {
                 apiClient.connect(settings.serverUrl, token)
             }
 
-            // Set up connection state observer (once) to connect Sendspin when API is ready
             if (!connectionObserverStarted) {
                 connectionObserverStarted = true
                 apiClient
@@ -252,7 +249,6 @@ class MusicService : LifecycleService() {
                             val client = ServiceLocator.getSendspinClient(
                                 this@MusicService, playerId, settings.serverUrl, token
                             )
-                            // Only start if idle (new client or disconnected)
                             if (client.state.value is SendspinState.Idle) {
                                 client.start()
                             }
@@ -264,7 +260,6 @@ class MusicService : LifecycleService() {
         }
     }
 
-    /** Ensure Sendspin and API event observers are running (idempotent). */
     private fun ensureObserversStarted(client: SendspinClient) {
         if (!sendspinObserverStarted) {
             sendspinObserverStarted = true
@@ -277,43 +272,19 @@ class MusicService : LifecycleService() {
         }
     }
 
-    /** Wire the ForwardingPlayer callbacks so media session controls route through the MA API. */
-    private fun wireMediaCallbacks() {
-        mediaManager.onPlayRequested = {
-            val id = activePlayerId
-            if (id != null) {
-                markCommandPending("play")
-                lifecycleScope.launch {
-                    try {
-                        ServiceLocator.api.playerPlay(id)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Play (session) failed: ${e.message}")
-                    }
-                }
-            }
-        }
-        mediaManager.onPauseRequested = {
-            val id = activePlayerId
-            if (id != null) {
-                markCommandPending("pause")
-                lifecycleScope.launch {
-                    try {
-                        ServiceLocator.api.playerPause(id)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Pause (session) failed: ${e.message}")
-                    }
-                }
-            }
-        }
-        mediaManager.onNextRequested = { handleNext() }
-        mediaManager.onPreviousRequested = { handlePrevious() }
-        mediaManager.onSeekRequested = { positionMs -> handleSeek(positionMs) }
+    // ── Transport commands ──────────────────────────────────
+
+    /** Reflect play/pause locally (notification + session) without calling the API. */
+    private fun setLocalPlaying(playing: Boolean) {
+        playingState.value = playing
+        mediaPlayer.setStreamPlaying(playing)
+        updateNotification()
     }
 
     private fun handlePlay() {
         val id = activePlayerId ?: return
         markCommandPending("play")
-        mediaManager.play()
+        setLocalPlaying(true)
         lifecycleScope.launch {
             try {
                 ServiceLocator.api.playerPlay(id)
@@ -326,7 +297,7 @@ class MusicService : LifecycleService() {
     private fun handlePause() {
         val id = activePlayerId ?: return
         markCommandPending("pause")
-        mediaManager.pause()
+        setLocalPlaying(false)
         lifecycleScope.launch {
             try {
                 ServiceLocator.api.playerPause(id)
@@ -337,15 +308,11 @@ class MusicService : LifecycleService() {
     }
 
     private fun handleNext() {
-        val id = activePlayerId
-        Log.d(TAG, "handleNext called, activePlayerId=$id")
-        if (id == null) return
+        val id = activePlayerId ?: return
         markCommandPending("next")
         lifecycleScope.launch {
             try {
-                Log.d(TAG, "Sending playerNext($id)")
                 ServiceLocator.api.playerNext(id)
-                Log.d(TAG, "playerNext($id) succeeded")
             } catch (e: Exception) {
                 Log.e(TAG, "Next failed: ${e.message}")
             }
@@ -353,15 +320,11 @@ class MusicService : LifecycleService() {
     }
 
     private fun handlePrevious() {
-        val id = activePlayerId
-        Log.d(TAG, "handlePrevious called, activePlayerId=$id")
-        if (id == null) return
+        val id = activePlayerId ?: return
         markCommandPending("previous")
         lifecycleScope.launch {
             try {
-                Log.d(TAG, "Sending playerPrevious($id)")
                 ServiceLocator.api.playerPrevious(id)
-                Log.d(TAG, "playerPrevious($id) succeeded")
             } catch (e: Exception) {
                 Log.e(TAG, "Previous failed: ${e.message}")
             }
@@ -379,80 +342,64 @@ class MusicService : LifecycleService() {
         }
     }
 
-    /** Observe playback state to manage foreground service lifecycle. */
-    private fun observePlaybackState() {
-        mediaManager.isPlaying.onEach { _ -> updateNotification() }.launchIn(lifecycleScope)
+    // ── Observers ───────────────────────────────────────────
 
-        // Also observe metadata changes for notification updates
-        combine(
-                        mediaManager.currentTrackTitle,
-                        mediaManager.currentTrackArtist,
-                        mediaManager.currentArtworkUri
-                ) { title, artist, artwork -> Triple(title, artist, artwork) }
-                .distinctUntilChanged()
-                .onEach { updateNotification() }
-                .launchIn(lifecycleScope)
+    private fun observePlaybackState() {
+        lifecycleScope.launch { playingState.collect { updateNotification() } }
+        lifecycleScope.launch { coordinator.snapshot.collect { updateNotification() } }
     }
 
-    /**
-     * Observe the new Sendspin state machine for playback state transitions.
-     * Stream start/end/clear and audio data are now handled internally by SendspinClient.
-     * We only need to observe state transitions for notification/MediaSession updates.
-     */
     private fun observeSendspinState(client: SendspinClient) {
-        // Observe state transitions for isPlaying / notification
         client.state
             .onEach { state ->
                 when (state) {
                     is SendspinState.Synchronized, is SendspinState.Buffering -> {
-                        mediaManager.setStreamActive(true)
-                        // Fetch metadata from server so notification shows track info
+                        mediaPlayer.setStreamActive(true)
+                        playingState.value = true
                         refreshMetadataFromServer()
                     }
                     is SendspinState.Ready, is SendspinState.Idle -> {
-                        mediaManager.setStreamActive(false)
+                        mediaPlayer.setStreamActive(false)
+                        playingState.value = false
                     }
                     is SendspinState.Error -> {
                         Log.e(TAG, "Sendspin error: ${state.error}")
-                        mediaManager.setStreamActive(false)
+                        mediaPlayer.setStreamActive(false)
+                        playingState.value = false
                     }
                     else -> {}
                 }
             }
             .launchIn(lifecycleScope)
 
-        // Observe metadata from Sendspin stream (e.g. radio track changes).
-        // Sendspin metadata never includes artwork bytes, but updateMetadata()
-        // preserves existing artworkData when artworkUrl is unchanged.
+        // Sendspin stream metadata (e.g. radio track changes). No artwork bytes/URL —
+        // the Coordinator preserves the current cover when the trackId is unchanged.
         client.metadata
             .onEach { metadata ->
                 if (metadata != null && (metadata.title != null || metadata.artist != null)) {
                     Log.d(TAG, "Sendspin metadata: ${metadata.title} by ${metadata.artist}")
-                    mediaManager.updateMetadata(
+                    coordinator.pushSendspinMetadata(
                         title = metadata.title ?: "",
                         artist = metadata.artist ?: "",
-                        album = metadata.album,
-                        artworkUrl = metadata.artworkUrl
+                        album = metadata.album
                     )
                 }
             }
             .launchIn(lifecycleScope)
     }
 
-    /** Observe MA API events for metadata updates (single source of truth). */
     private fun observeApiEvents() {
         apiClient
-                .events
-                .onEach { event ->
-                    when (event.event) {
-                        "queue_updated" -> handleQueueUpdated(event)
-                        "player_updated" -> handlePlayerUpdated(event)
-                    }
+            .events
+            .onEach { event ->
+                when (event.event) {
+                    "queue_updated" -> handleQueueUpdated(event)
+                    "player_updated" -> handlePlayerUpdated(event)
                 }
-                .launchIn(lifecycleScope)
+            }
+            .launchIn(lifecycleScope)
     }
 
-    // Debounce jobs for event handlers — cancel previous if a new event arrives quickly
     private var playerUpdatedJob: Job? = null
     private var queueUpdatedJob: Job? = null
 
@@ -468,25 +415,19 @@ class MusicService : LifecycleService() {
     private fun handleQueueUpdated(event: MaApiClient.MaEvent) {
         val queueId = activeQueueId ?: activePlayerId ?: return
         if (event.objectId != null && event.objectId != queueId) return
-        // Update activeQueueId from the event's objectId if present
         if (event.objectId != null) activeQueueId = event.objectId
 
-        // Try to parse inline data first (no API call needed)
         val inlineQueue = tryParsePlayerQueue(event.data)
 
-        // Debounce: cancel previous job if events arrive faster than we can handle them
         queueUpdatedJob?.cancel()
         queueUpdatedJob = lifecycleScope.launch {
-            // Short delay to coalesce rapid-fire events
             if (inlineQueue == null) delay(150)
             try {
                 val q = inlineQueue ?: ServiceLocator.api.getPlayerQueue(queueId) ?: return@launch
                 val prevItemId = currentQueueItemId
                 if (q.currentItem?.queueItemId != prevItemId) {
-                    // Track changed — full metadata update
                     updateMetadataFromQueue(q)
                 } else {
-                    // Same track — only update elapsed time
                     updateElapsedTimeFromQueue(q)
                 }
             } catch (e: Exception) {
@@ -500,13 +441,10 @@ class MusicService : LifecycleService() {
         val id = activePlayerId ?: return
         if (event.objectId != null && event.objectId != id) return
 
-        // Debounce: cancel previous job if events arrive faster than we can handle them
         playerUpdatedJob?.cancel()
         playerUpdatedJob = lifecycleScope.launch {
-            // Short delay to coalesce rapid-fire events
             delay(200)
             try {
-                // Skip during Sendspin reconnect — the player briefly doesn't exist at MA.
                 if (isSendspinReconnecting()) {
                     Log.d(TAG, "Skipping player_updated during Sendspin reconnect")
                     return@launch
@@ -514,26 +452,19 @@ class MusicService : LifecycleService() {
                 val player = ServiceLocator.api.getPlayer(id) ?: return@launch
                 when (player.state) {
                     PlayerState.PAUSED, PlayerState.IDLE -> {
-                        if (mediaManager.playbackState == PlayerState.PLAYING &&
-                                !isCommandEcho("pause")) {
+                        if (playingState.value && !isCommandEcho("pause")) {
                             Log.d(TAG, "External pause/stop detected, pausing locally")
-                            mediaManager.pause()
+                            setLocalPlaying(false)
                         }
                     }
                     PlayerState.PLAYING -> {
-                        if (mediaManager.playbackState != PlayerState.PLAYING &&
-                                mediaManager.playbackState != PlayerState.BUFFERING &&
-                                !isCommandEcho("play")) {
+                        if (!playingState.value && !isCommandEcho("play")) {
                             Log.d(TAG, "External play detected, resuming locally")
-                            mediaManager.play()
+                            setLocalPlaying(true)
                         }
                     }
                     else -> {}
                 }
-                // Only do full metadata update if the track changed.
-                // Same-track player_updated events (volume, state) don't need a
-                // metadata rebuild — that causes redundant MediaSession invalidations
-                // which make Bluetooth AVRCP continuously refresh its display.
                 val qId = activeQueueId ?: id
                 val q = ServiceLocator.api.getPlayerQueue(qId) ?: return@launch
                 val prevItemId = currentQueueItemId
@@ -549,7 +480,6 @@ class MusicService : LifecycleService() {
         }
     }
 
-    /** Fetch queue and update metadata on MediaSession. Called on stream/start. */
     private fun refreshMetadataFromServer() {
         val queueId = activeQueueId ?: activePlayerId ?: return
         lifecycleScope.launch {
@@ -562,217 +492,102 @@ class MusicService : LifecycleService() {
         }
     }
 
-    /** Full metadata update — title, artist, album, artwork, duration, elapsed time. */
+    // ── Metadata → Coordinator ──────────────────────────────
+
+    /**
+     * Build [TrackMetadata] from the queue and push it to the Coordinator, which resolves artwork
+     * bytes (download + fallback) and emits the snapshot. For radio/live the now-playing song lives
+     * in `player.current_media` — its title/artist AND its `image_url` (the real song cover) are
+     * used, with the station image as a fallback (issue 1). Radio pushes with isLive=true so there
+     * are no phantom prev/next neighbors (issue 4).
+     */
     private fun updateMetadataFromQueue(queue: PlayerQueue) {
         val currentItem = queue.currentItem ?: return
         val media = currentItem.mediaItem ?: return
-
         currentQueueItemId = currentItem.queueItemId
-
         val isRadio = media.mediaType == MediaType.RADIO
 
-        // Always run in a coroutine so we can download artwork before pushing metadata.
-        // Bluetooth AVRCP caches metadata per track and may not refresh on later updates,
-        // so we must include artwork bytes in the FIRST metadata push.
         lifecycleScope.launch {
-            val title: String
-            val artist: String
-            val album: String?
-
             if (isRadio) {
-                val radioMeta = try {
-                    val player = ServiceLocator.api.getPlayer(activePlayerId ?: return@launch)
-                    val pmTitle = player?.currentMedia?.title?.takeIf { it.isNotBlank() }
-                    val pmArtist = player?.currentMedia?.artist?.takeIf { it.isNotBlank() }
-                    Triple(
-                        pmTitle ?: currentItem.name.ifBlank { media.name },
-                        pmArtist ?: media.name,
-                        player?.currentMedia?.album ?: media.name
-                    )
+                val player = try {
+                    ServiceLocator.api.getPlayer(activePlayerId ?: return@launch)
                 } catch (e: Exception) {
-                    Triple(currentItem.name.ifBlank { media.name }, media.name, media.name)
+                    null
                 }
-                title = radioMeta.first
-                artist = radioMeta.second
-                album = radioMeta.third
+                val cm = player?.currentMedia
+                val title = cm?.title?.takeIf { it.isNotBlank() }
+                    ?: currentItem.name.ifBlank { media.name }
+                val artist = cm?.artist?.takeIf { it.isNotBlank() } ?: media.name
+                val album = cm?.album ?: media.name
+                // Prefer the now-playing song cover; fall back to the station logo.
+                val artworkUrl = cm?.imageUrl?.takeIf { it.isNotBlank() }
+                    ?: (media.image ?: currentItem.image)?.let { getImageUrl(it) }
+
+                Log.d(TAG, "radio metadata: title='$title' artist='$artist' artwork=$artworkUrl")
+                coordinator.pushQueueUpdate(
+                    current = TrackMetadata(title, artist, album, artworkUrl, null),
+                    prev = null,
+                    next = null,
+                    isLive = true
+                )
+                mediaPlayer.setKnownDuration(C.TIME_UNSET)
             } else {
-                title = media.name
-                artist = media.artists.joinToString(", ") { it.name }
-                album = media.album?.name
+                val title = media.name
+                val artist = media.artists.joinToString(", ") { it.name }
+                val album = media.album?.name
+                val artworkUrl = (media.image ?: currentItem.image)?.let { getImageUrl(it) }
+
+                val prev = if (previousTrackTitle != null || previousTrackArtist != null) {
+                    TrackMetadata(previousTrackTitle ?: "", previousTrackArtist ?: "", null, null, null)
+                } else null
+
+                val nextMedia = queue.nextItem?.mediaItem
+                val next = if (nextMedia != null) {
+                    TrackMetadata(
+                        title = nextMedia.name,
+                        artist = nextMedia.artists.joinToString(", ") { it.name },
+                        album = nextMedia.album?.name,
+                        artworkUrl = nextMedia.image?.let { getImageUrl(it) },
+                        artworkBytes = null
+                    )
+                } else null
+
+                Log.d(TAG, "track metadata: title='$title' artist='$artist' prev='$previousTrackTitle' next='${nextMedia?.name}' artwork=$artworkUrl")
+                coordinator.pushQueueUpdate(
+                    current = TrackMetadata(title, artist, album, artworkUrl, null),
+                    prev = prev,
+                    next = next,
+                    isLive = false
+                )
+
+                previousTrackTitle = title
+                previousTrackArtist = artist
+
+                if (currentItem.duration > 0) {
+                    mediaPlayer.setKnownDuration(currentItem.duration * 1000L)
+                } else {
+                    mediaPlayer.setKnownDuration(C.TIME_UNSET)
+                }
             }
 
-            applyMetadata(title, artist, album, media, currentItem, queue, isRadio)
+            val elapsedMs = (queue.elapsedTime * 1000).toLong()
+            val playing = queue.state == PlayerState.PLAYING
+            mediaPlayer.setKnownElapsed(elapsedMs, playing)
+            if (playing != playingState.value) setLocalPlaying(playing)
+            mediaPlayer.invalidate()
+            updateNotification()
         }
     }
 
-    private suspend fun applyMetadata(
-            title: String,
-            artist: String,
-            album: String?,
-            media: io.musicassistant.companion.data.model.QueueMediaItem,
-            currentItem: io.musicassistant.companion.data.model.QueueItem,
-            queue: PlayerQueue,
-            isRadio: Boolean
-    ) {
-        // Update prev/next neighbor metadata for Bluetooth AVRCP display
-        val nextMedia = queue.nextItem?.mediaItem
-        val nextTitle = nextMedia?.name
-        val nextArtist = nextMedia?.artists?.joinToString(", ") { it.name }
-        val prevTitle = previousTrackTitle
-        val prevArtist = previousTrackArtist
-        mediaManager.updateQueueNeighborMetadata(
-            prevTitle = prevTitle,
-            prevArtist = prevArtist,
-            nextTitle = nextTitle,
-            nextArtist = nextArtist
-        )
-        // Cache current as previous for the next track change
-        previousTrackTitle = title
-        previousTrackArtist = artist
-
-        val artworkImage = media.image ?: currentItem.image
-        val artworkUrl = if (artworkImage != null) getImageUrl(artworkImage) else null
-
-        Log.d(TAG, "applyMetadata: title='$title' artist='$artist' prev='$prevTitle' next='$nextTitle' nextItem=${queue.nextItem != null} isRadio=$isRadio artwork=$artworkUrl")
-
-        // Download artwork BEFORE pushing to MediaSession.
-        // Bluetooth AVRCP caches metadata per track — if we push without artwork first,
-        // the car head unit may never show the cover art even after a later update.
-        val hasCachedArtwork = artworkUrl != null && artworkUrl == cachedArtworkUrl && cachedArtworkBytes != null
-        val artworkBytes: ByteArray?
-        if (hasCachedArtwork) {
-            artworkBytes = cachedArtworkBytes
-            if (cachedArtworkBitmap == null && cachedArtworkBytes != null) {
-                cachedArtworkBitmap = decodeToBitmap(cachedArtworkBytes!!, 500, 500)
-            }
-        } else {
-            // Download artwork synchronously (within this coroutine) before pushing metadata
-            val downloaded = if (artworkUrl != null) downloadArtwork(artworkUrl) else null
-            artworkBytes = downloaded ?: getAppIconBytes()
-            if (artworkBytes != null) {
-                cachedArtworkUrl = artworkUrl
-                cachedArtworkBytes = artworkBytes
-                cachedArtworkBitmap = decodeToBitmap(artworkBytes, 500, 500)
-            }
-            Log.d(TAG, "applyMetadata: artwork downloaded=${downloaded != null} fallback=${downloaded == null && artworkBytes != null} size=${artworkBytes?.size}")
-        }
-
-        // Convert to 300x300 JPEG for Bluetooth AVRCP compatibility.
-        // AVRCP has size limits and JPEG is the most compatible format.
-        val jpegBytes = if (artworkBytes != null) {
-            ArtworkConverter.toJpeg(artworkBytes) ?: artworkBytes
-        } else {
-            null
-        }
-
-        // Push metadata with artwork bytes to MediaSession.
-        // Media3's BitmapLoader decodes artworkData to a Bitmap and sets it as
-        // METADATA_KEY_ALBUM_ART on the legacy MediaSession — which AVRCP reads.
-        // Do NOT set artworkUri — if both are set, some controllers prefer the URI
-        // (which BT can't resolve) over the embedded bitmap.
-        mediaManager.updateMetadata(
-                title = title,
-                artist = artist,
-                album = album,
-                artworkUrl = artworkUrl,
-                artworkData = jpegBytes
-        )
-
-        // Duration: for live content, reset to TIME_UNSET
-        if (currentItem.duration > 0 && !isRadio) {
-            mediaManager.setKnownDuration(currentItem.duration * 1000L)
-        } else {
-            mediaManager.setKnownDuration(C.TIME_UNSET)
-        }
-
-        // Elapsed time
-        val elapsedMs = (queue.elapsedTime * 1000).toLong()
-        val playing = queue.state == PlayerState.PLAYING
-        mediaManager.setKnownElapsedTime(elapsedMs, playing)
-
-        // Force MediaSession to re-read state
-        mediaManager.invalidateSessionState()
-        updateNotification()
-    }
-
-    /** Lightweight update — only elapsed time, no metadata rebuild. */
+    /** Lightweight update — only elapsed time/duration, no metadata rebuild. */
     private fun updateElapsedTimeFromQueue(queue: PlayerQueue) {
         val currentItem = queue.currentItem ?: return
         if (currentItem.duration > 0) {
-            mediaManager.setKnownDuration(currentItem.duration * 1000L)
+            mediaPlayer.setKnownDuration(currentItem.duration * 1000L)
         }
         val elapsedMs = (queue.elapsedTime * 1000).toLong()
         val playing = queue.state == PlayerState.PLAYING
-        mediaManager.setKnownElapsedTime(elapsedMs, playing)
-    }
-
-    /** Download artwork image bytes for embedding in MediaSession metadata. */
-    private suspend fun downloadArtwork(url: String): ByteArray? = withContext(Dispatchers.IO) {
-        try {
-            val token = apiClient.currentAuthToken
-            Log.d(TAG, "Downloading artwork: $url (hasToken=${!token.isNullOrEmpty()})")
-            val request = okhttp3.Request.Builder().url(url).apply {
-                if (!token.isNullOrEmpty()) {
-                    addHeader("Authorization", "Bearer $token")
-                }
-            }.build()
-            val response = ServiceLocator.httpClient.newCall(request).execute()
-            response.use {
-                if (it.isSuccessful) {
-                    val bytes = it.body?.bytes()
-                    Log.d(TAG, "Artwork downloaded: ${bytes?.size ?: 0} bytes")
-                    bytes
-                } else {
-                    Log.w(TAG, "Artwork download failed: HTTP ${it.code} ${it.message}")
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to download artwork: ${e.message}")
-            null
-        }
-    }
-
-    /** Get app icon as PNG bytes (fallback when no artwork available). */
-    private fun getAppIconBytes(): ByteArray? {
-        return try {
-            val drawable = packageManager.getApplicationIcon(packageName)
-            val bitmap = android.graphics.Bitmap.createBitmap(
-                    256, 256, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            drawable.setBounds(0, 0, 256, 256)
-            drawable.draw(canvas)
-            val stream = java.io.ByteArrayOutputStream()
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
-            bitmap.recycle()
-            stream.toByteArray()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to get app icon: ${e.message}")
-            null
-        }
-    }
-
-    /** Decode raw image bytes into a Bitmap, scaled down to fit maxWidth x maxHeight. */
-    private fun decodeToBitmap(bytes: ByteArray, maxWidth: Int, maxHeight: Int): android.graphics.Bitmap? {
-        return try {
-            val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-            var inSampleSize = 1
-            if (options.outHeight > maxHeight || options.outWidth > maxWidth) {
-                val halfH = options.outHeight / 2
-                val halfW = options.outWidth / 2
-                while (halfH / inSampleSize >= maxHeight && halfW / inSampleSize >= maxWidth) {
-                    inSampleSize *= 2
-                }
-            }
-            val decodeOptions = android.graphics.BitmapFactory.Options().apply {
-                this.inSampleSize = inSampleSize
-            }
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decode artwork bitmap: ${e.message}")
-            null
-        }
+        mediaPlayer.setKnownElapsed(elapsedMs, playing)
     }
 
     private fun getImageUrl(image: MediaItemImage): String {
@@ -780,37 +595,38 @@ class MusicService : LifecycleService() {
         return ServiceLocator.api.getImageUrl(image, baseUrl)
     }
 
-    /** Track Sendspin connection state to detect reconnect windows. */
     private fun observeSendspinConnectionState(client: SendspinClient) {
         client.state
-                .onEach { state ->
-                    when (state) {
-                        is SendspinState.Idle, is SendspinState.Reconnecting -> {
-                            sendspinDisconnectedAt = SystemClock.elapsedRealtime()
-                            Log.d(TAG, "Sendspin disconnected/reconnecting — grace period started")
-                        }
-                        is SendspinState.Ready, is SendspinState.Synchronized -> {
-                            if (sendspinDisconnectedAt > 0L) {
-                                val downtime = SystemClock.elapsedRealtime() - sendspinDisconnectedAt
-                                Log.d(TAG, "Sendspin reconnected after ${downtime}ms")
-                            }
-                        }
-                        else -> {}
+            .onEach { state ->
+                when (state) {
+                    is SendspinState.Idle, is SendspinState.Reconnecting -> {
+                        sendspinDisconnectedAt = SystemClock.elapsedRealtime()
+                        Log.d(TAG, "Sendspin disconnected/reconnecting — grace period started")
                     }
+                    is SendspinState.Ready, is SendspinState.Synchronized -> {
+                        if (sendspinDisconnectedAt > 0L) {
+                            val downtime = SystemClock.elapsedRealtime() - sendspinDisconnectedAt
+                            Log.d(TAG, "Sendspin reconnected after ${downtime}ms")
+                        }
+                    }
+                    else -> {}
                 }
-                .launchIn(lifecycleScope)
+            }
+            .launchIn(lifecycleScope)
     }
+
+    // ── Foreground / notification ───────────────────────────
 
     private fun startForeground() {
         if (isForeground) return
         val notification = buildNotification()
         ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                else 0
+            this,
+            NOTIFICATION_ID,
+            notification,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            else 0
         )
         isForeground = true
     }
@@ -820,105 +636,104 @@ class MusicService : LifecycleService() {
         isForeground = false
     }
 
+    /** Decode the current artwork bytes to a Bitmap, caching by byte-array identity. */
+    private fun currentArtBitmap(): android.graphics.Bitmap? {
+        val bytes = coordinator.snapshot.value.current.artworkBytes ?: return lastArtBitmap
+        if (bytes === lastArtBytes && lastArtBitmap != null) return lastArtBitmap
+        val bmp = try {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decode notification artwork: ${e.message}"); null
+        }
+        lastArtBytes = bytes
+        lastArtBitmap = bmp
+        return bmp
+    }
+
     private fun updateNotification() {
         if (!isForeground) return
-        val title = mediaManager.currentTrackTitle.value
-        val artist = mediaManager.currentTrackArtist.value
-        val playing = mediaManager.isPlaying.value
-        val artworkUrl = cachedArtworkUrl
+        val current = coordinator.snapshot.value.current
+        val title = current.title.takeIf { it.isNotBlank() }
+        val artist = current.artist.takeIf { it.isNotBlank() }
+        val playing = playingState.value
         if (title == lastNotifTitle && artist == lastNotifArtist &&
-                playing == lastNotifIsPlaying && artworkUrl == lastNotifArtworkUrl) {
+            playing == lastNotifIsPlaying && current.artworkBytes === lastArtBytes) {
             return
         }
         lastNotifTitle = title
         lastNotifArtist = artist
         lastNotifIsPlaying = playing
-        lastNotifArtworkUrl = artworkUrl
-        val notification = buildNotification()
         val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, notification)
+        nm.notify(NOTIFICATION_ID, buildNotification())
     }
 
     private fun buildNotification(): Notification {
-        val session = mediaManager.mediaSession
-        val isPlaying = mediaManager.isPlaying.value
+        val current = coordinator.snapshot.value.current
+        val isPlaying = playingState.value
 
         val contentIntent =
-                PendingIntent.getActivity(
-                        this,
-                        0,
-                        Intent(this, MainActivity::class.java),
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
+            PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
 
-        // Action PendingIntents
-        val prevPi =
-                PendingIntent.getService(
-                        this,
-                        1,
-                        Intent(this, MusicService::class.java).apply { action = ACTION_PREVIOUS },
-                        PendingIntent.FLAG_IMMUTABLE
-                )
-        val playPausePi =
-                PendingIntent.getService(
-                        this,
-                        2,
-                        Intent(this, MusicService::class.java).apply {
-                            action = if (isPlaying) ACTION_PAUSE else ACTION_PLAY
-                        },
-                        PendingIntent.FLAG_IMMUTABLE
-                )
-        val nextPi =
-                PendingIntent.getService(
-                        this,
-                        3,
-                        Intent(this, MusicService::class.java).apply { action = ACTION_NEXT },
-                        PendingIntent.FLAG_IMMUTABLE
-                )
+        val prevPi = PendingIntent.getService(
+            this, 1,
+            Intent(this, MusicService::class.java).apply { action = ACTION_PREVIOUS },
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val playPausePi = PendingIntent.getService(
+            this, 2,
+            Intent(this, MusicService::class.java).apply {
+                action = if (isPlaying) ACTION_PAUSE else ACTION_PLAY
+            },
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val nextPi = PendingIntent.getService(
+            this, 3,
+            Intent(this, MusicService::class.java).apply { action = ACTION_NEXT },
+            PendingIntent.FLAG_IMMUTABLE
+        )
 
         val builder =
-                NotificationCompat.Builder(this, CHANNEL_ID)
-                        .setSmallIcon(R.drawable.ic_notification)
-                        .setContentTitle(mediaManager.currentTrackTitle.value ?: "Music Assistant")
-                        .setContentText(mediaManager.currentTrackArtist.value ?: "Connected")
-                        .setContentIntent(contentIntent)
-                        .setOngoing(isPlaying)
-                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                        .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-                        .setSilent(true)
-                        .apply {
-                            val artwork = cachedArtworkBitmap
-                            if (artwork != null) setLargeIcon(artwork)
-                        }
-                        .addAction(R.drawable.ic_skip_previous, "Previous", prevPi)
-                        .addAction(
-                                if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play,
-                                if (isPlaying) "Pause" else "Play",
-                                playPausePi
-                        )
-                        .addAction(R.drawable.ic_skip_next, "Next", nextPi)
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(current.title.takeIf { it.isNotBlank() } ?: "Music Assistant")
+                .setContentText(current.artist.takeIf { it.isNotBlank() } ?: "Connected")
+                .setContentIntent(contentIntent)
+                .setOngoing(isPlaying)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+                .setSilent(true)
+                .apply { currentArtBitmap()?.let { setLargeIcon(it) } }
+                .addAction(R.drawable.ic_skip_previous, "Previous", prevPi)
+                .addAction(
+                    if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play,
+                    if (isPlaying) "Pause" else "Play",
+                    playPausePi
+                )
+                .addAction(R.drawable.ic_skip_next, "Next", nextPi)
 
-        if (session != null) {
-            builder.setStyle(
-                    MediaStyleNotificationHelper.MediaStyle(session)
-                            .setShowActionsInCompactView(0, 1, 2)
-            )
-        }
+        builder.setStyle(
+            MediaStyleNotificationHelper.MediaStyle(mediaSessionHost.session)
+                .setShowActionsInCompactView(0, 1, 2)
+        )
 
         return builder.build()
     }
 
     private fun createNotificationChannel() {
         val channel =
-                NotificationChannel(
-                                CHANNEL_ID,
-                                "Music Playback",
-                                NotificationManager.IMPORTANCE_LOW
-                        )
-                        .apply {
-                            description = "Shows current playback info and controls"
-                            setShowBadge(false)
-                        }
+            NotificationChannel(
+                CHANNEL_ID,
+                "Music Playback",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows current playback info and controls"
+                setShowBadge(false)
+            }
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(channel)
     }

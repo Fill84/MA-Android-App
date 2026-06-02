@@ -30,7 +30,9 @@ class ArtworkPipeline(
     private val jpegQuality: Int = 90,
     private val maxAttempts: Int = 3,
     private val timeoutMs: Long = 5_000,
-    cacheSize: Int = 10
+    cacheSize: Int = 10,
+    /** Supplies the MA auth token for same-origin imageproxy URLs. Default: no auth. */
+    private val authTokenProvider: () -> String? = { null }
 ) {
     private val client: OkHttpClient = baseHttpClient.newBuilder()
         .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -66,9 +68,12 @@ class ArtworkPipeline(
 
     private suspend fun download(url: String): ByteArray? = withContext(ioDispatcher) {
         var attempt = 0
+        val token = authTokenProvider()?.takeIf { it.isNotBlank() }
         while (attempt < maxAttempts) {
             attempt++
-            val request = Request.Builder().url(url).build()
+            val request = Request.Builder().url(url)
+                .apply { if (token != null) addHeader("Authorization", "Bearer $token") }
+                .build()
             val outcome = runCatching {
                 client.newCall(request).execute().use { response ->
                     when {
