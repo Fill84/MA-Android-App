@@ -54,9 +54,10 @@ android {
 
     testOptions {
         // Let android.* stubs (Log, BitmapFactory, ...) return defaults instead of
-        // throwing "not mocked" in JVM unit tests. Pure-logic components stay testable
-        // without Robolectric; real device builds use the real implementations.
+        // throwing "not mocked" in plain JVM unit tests. Robolectric tests run the real
+        // framework on the JVM (no device) to verify what a MediaController/Bluetooth reads.
         unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -97,5 +98,6 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.turbine)
+    testImplementation(libs.robolectric)
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
