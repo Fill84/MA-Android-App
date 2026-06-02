@@ -51,6 +51,13 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        // Let android.* stubs (Log, BitmapFactory, ...) return defaults instead of
+        // throwing "not mocked" in JVM unit tests. Pure-logic components stay testable
+        // without Robolectric; real device builds use the real implementations.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -90,4 +97,5 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.turbine)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
