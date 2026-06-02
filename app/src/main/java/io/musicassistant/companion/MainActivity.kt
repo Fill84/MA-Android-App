@@ -9,12 +9,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.data.settings.ThemeMode
+import io.musicassistant.companion.ui.HomeShortcut
 import io.musicassistant.companion.ui.navigation.AppNavigation
 import io.musicassistant.companion.ui.theme.MaCompanionTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Offer to add a home-screen shortcut once (Android 8+ can't add it silently).
+        HomeShortcut.requestOnceOnFirstLaunch(this)
         setContent {
             val context = LocalContext.current
             val settingsRepository = remember { SettingsModule.getRepository(context) }
