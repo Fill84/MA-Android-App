@@ -302,21 +302,12 @@ class AutoBrowseCallback(
         val ctx = appContext
         if (ctx != null) {
             for (item in mediaItems) {
-                when (item.mediaId) {
-                    // Playlist items from our 3-item now-playing list (prev/current/next)
-                    // BMW AVRCP sends these when user selects an item from the playlist view
-                    "next" -> {
-                        Log.d(TAG, "Playlist selection → NEXT")
-                        onNextRequested?.invoke()
-                    }
-                    "prev" -> {
-                        Log.d(TAG, "Playlist selection → PREVIOUS")
-                        onPreviousRequested?.invoke()
-                    }
-                    "current" -> {
-                        Log.d(TAG, "Playlist selection → CURRENT (ignored)")
-                    }
-                    else -> playMediaId(item.mediaId, ctx)
+                // The synthetic prev/current/next now-playing items are handled by
+                // MaPlayer.handleSeek (Media3 timeline) — NOT here. Routing them again
+                // from onAddMediaItems caused a competing/duplicated prev↔next path.
+                // Only real library items are played here.
+                if (item.mediaId != "prev" && item.mediaId != "current" && item.mediaId != "next") {
+                    playMediaId(item.mediaId, ctx)
                 }
             }
         }
