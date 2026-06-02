@@ -28,6 +28,16 @@ class StreamAudioPlayer(context: Context) {
 
     companion object {
         private const val TAG = "StreamAudioPlayer"
+
+        /**
+         * Maps an MA player volume percentage (0..100) to a system STREAM_MUSIC index (0..maxIndex),
+         * rounded to the nearest step. Pure function — unit-tested.
+         */
+        fun volumePercentToStreamIndex(percent: Int, maxIndex: Int): Int {
+            if (maxIndex <= 0) return 0
+            val p = percent.coerceIn(0, 100)
+            return Math.round(p / 100.0 * maxIndex).toInt().coerceIn(0, maxIndex)
+        }
     }
 
     private val appContext: Context = context.applicationContext
@@ -295,8 +305,21 @@ class StreamAudioPlayer(context: Context) {
         audioTrack = null
     }
 
+    /**
+     * Apply the MA player volume by mapping it to the SYSTEM media (STREAM_MUSIC) volume — a single
+     * attenuation — instead of multiplying the AudioTrack by volume/100 on top of the system/Bluetooth
+     * volume. The old approach made playback quadratically quieter than other apps, very noticeable
+     * over Bluetooth where the system volume is slaved to the car's absolute volume (issue 3).
+     */
     fun setVolume(volume: Int) {
         currentVolume = volume.coerceIn(0, 100)
+        try {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val index = volumePercentToStreamIndex(currentVolume, max)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting system volume", e)
+        }
         applyVolume()
     }
 
@@ -311,11 +334,14 @@ class StreamAudioPlayer(context: Context) {
         return if (max > 0) (current * 100 / max).coerceIn(0, 100) else 0
     }
 
+    /**
+     * The AudioTrack stays at unity gain; only mute attenuates it. The real volume control is the
+     * system STREAM_MUSIC level (see [setVolume]), so we never stack a second software attenuation.
+     */
     private fun applyVolume() {
         val track = audioTrack ?: return
-        val volumeFloat = if (isMuted) 0f else (currentVolume / 100f).coerceIn(0f, 1f)
         try {
-            track.setVolume(volumeFloat)
+            track.setVolume(if (isMuted) 0f else 1f)
         } catch (e: Exception) {
             Log.e(TAG, "Error setting volume", e)
         }
