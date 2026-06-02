@@ -377,11 +377,13 @@ class MusicService : LifecycleService() {
         client.metadata
             .onEach { metadata ->
                 if (metadata != null && (metadata.title != null || metadata.artist != null)) {
-                    Log.d(TAG, "Sendspin metadata: ${metadata.title} by ${metadata.artist}")
+                    val art = metadata.artworkUrl?.let { resolveArtworkUrl(it) }
+                    Log.d(TAG, "Sendspin metadata: ${metadata.title} by ${metadata.artist} artwork=$art")
                     coordinator.pushSendspinMetadata(
                         title = metadata.title ?: "",
                         artist = metadata.artist ?: "",
-                        album = metadata.album
+                        album = metadata.album,
+                        artworkUrl = art
                     )
                 }
             }
@@ -593,6 +595,38 @@ class MusicService : LifecycleService() {
     private fun getImageUrl(image: MediaItemImage): String {
         val baseUrl = apiClient.connectionUrl.ifEmpty { apiClient.serverInfo.value?.baseUrl ?: "" }
         return ServiceLocator.api.getImageUrl(image, baseUrl)
+    }
+
+    /**
+     * Resolve a Sendspin artwork URL to one the device can actually reach. MA stream metadata often
+     * carries the server's INTERNAL LAN address (e.g. http://192.168.x.x:8095/imageproxy?...), which
+     * an off-LAN / reverse-proxied client can't connect to. We re-point such imageproxy URLs to the
+     * configured server base (the externally reachable URL the API uses). External cover URLs
+     * (e.g. a radio station's own CDN) are left untouched. Relative paths are resolved against base.
+     */
+    private fun resolveArtworkUrl(url: String): String? {
+        if (url.isBlank()) return null
+        val base = apiClient.connectionUrl.ifEmpty { apiClient.serverInfo.value?.baseUrl ?: "" }
+        val isHttp = url.startsWith("http://") || url.startsWith("https://")
+        return try {
+            if (isHttp) {
+                val parsed = java.net.URI(url)
+                val path = parsed.rawPath ?: ""
+                if (path.contains("/imageproxy") && base.isNotBlank()) {
+                    val query = parsed.rawQuery?.let { "?$it" } ?: ""
+                    base.trimEnd('/') + path + query
+                } else {
+                    url // external cover (e.g. radio CDN) — use as-is
+                }
+            } else if (base.isNotBlank()) {
+                ServiceLocator.api.getImageUrl(url, base)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveArtworkUrl failed for $url: ${e.message}")
+            url
+        }
     }
 
     private fun observeSendspinConnectionState(client: SendspinClient) {

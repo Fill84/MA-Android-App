@@ -90,23 +90,35 @@ class MediaMetadataCoordinator(
     }
 
     /**
-     * Sendspin metadata events carry no artwork URL/bytes. If the trackId matches the current
-     * snapshot's track, keep its bytes; otherwise reuse last-known bytes for that trackId, else
-     * fall back. Preserves the snapshot's neighbors and [QueueSnapshot.isLive] flag.
+     * Sendspin stream metadata (the primary source of track changes for radio/live). It may carry
+     * an [artworkUrl] — when present we fetch the real cover through the pipeline, which is the only
+     * artwork path that reliably fires for radio. Resolution order for the immediate emit:
+     * pipeline cache(url) → same-track existing bytes → last-known for trackId → fallback. Preserves
+     * the snapshot's neighbors and [QueueSnapshot.isLive] flag.
      */
-    fun pushSendspinMetadata(title: String, artist: String, album: String?) {
-        sequence.incrementAndGet()
-        val candidate = TrackMetadata(title = title, artist = artist, album = album, artworkUrl = null, artworkBytes = null)
+    fun pushSendspinMetadata(title: String, artist: String, album: String?, artworkUrl: String? = null) {
+        val myToken = sequence.incrementAndGet()
+        val candidate = TrackMetadata(title = title, artist = artist, album = album, artworkUrl = artworkUrl, artworkBytes = null)
         val currentSnap = _snapshot.value
         val current = currentSnap.current
 
-        val bytes = when {
-            current.trackId == candidate.trackId && current.hasArtwork -> current.artworkBytes
-            lastBytesByTrackId[candidate.trackId] != null -> lastBytesByTrackId[candidate.trackId]
-            else -> fallbackBytes
+        val cached = artworkUrl?.takeIf { it.isNotBlank() }?.let { pipeline.cachedOrNull(it) }
+        val bytes = cached
+            ?: (if (current.trackId == candidate.trackId && current.hasArtwork) current.artworkBytes else null)
+            ?: lastBytesByTrackId[candidate.trackId]
+            ?: fallbackBytes
+        emit(currentSnap.copy(current = candidate.copy(artworkBytes = bytes)))
+
+        if (cached == null && !artworkUrl.isNullOrBlank()) {
+            scope.launch {
+                val fetched = pipeline.fetch(artworkUrl)
+                if (fetched != null && myToken == sequence.get()) {
+                    lastBytesByTrackId[candidate.trackId] = fetched
+                    val existing = _snapshot.value
+                    emit(existing.copy(current = existing.current.copy(artworkBytes = fetched)))
+                }
+            }
         }
-        val resolved = candidate.copy(artworkBytes = bytes ?: fallbackBytes)
-        emit(currentSnap.copy(current = resolved))
     }
 
     /** Release the coroutine scope. Call from MusicService.onDestroy. */

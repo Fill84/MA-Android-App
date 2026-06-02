@@ -125,6 +125,23 @@ class MediaMetadataCoordinatorTest {
     }
 
     @Test
+    fun `sendspin metadata with artworkUrl fetches and emits real bytes`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val real = byteArrayOf(0x11, 0x22)
+        val pipeline: ArtworkPipeline = mockk()
+        coEvery { pipeline.cachedOrNull(any()) } returns null
+        coEvery { pipeline.fetch("http://radio/cover.jpg") } returns real
+        val c = makeCoordinator(pipeline = pipeline, dispatcher = dispatcher)
+
+        // Radio track change arrives via Sendspin with a real cover URL.
+        c.pushSendspinMetadata("RadioSong", "Station", null, artworkUrl = "http://radio/cover.jpg")
+        advanceUntilIdle()
+
+        assertArrayEquals(real, c.snapshot.value.current.artworkBytes)
+        assertEquals("RadioSong", c.snapshot.value.current.title)
+    }
+
+    @Test
     fun `stale fetch result is discarded when newer update has arrived`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val pipeline: ArtworkPipeline = mockk()
