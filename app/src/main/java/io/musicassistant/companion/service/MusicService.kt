@@ -385,6 +385,7 @@ class MusicService : LifecycleService() {
                         album = metadata.album,
                         artworkUrl = art
                     )
+                    lifecycleScope.launch { resolveLiveContext(metadata.title) }
                 }
             }
             .launchIn(lifecycleScope)
@@ -491,6 +492,44 @@ class MusicService : LifecycleService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to refresh metadata: ${e.message}")
             }
+        }
+    }
+
+    // ── Live/radio source detection (station-logo fallback + single-item timeline) ──
+    private var lastSourceProbeTitle: String? = null
+    @Volatile private var cachedStationUrl: String? = null
+    @Volatile private var cachedStationBytes: ByteArray? = null
+
+    /**
+     * Probe the player to learn whether the current source is radio/live, and if so resolve the
+     * station logo from the active-source queue. Feeds the Coordinator's live context so radio shows
+     * a single-item timeline (no phantom prev/next) and falls back to the station logo — not the app
+     * icon — when a radio track carries no per-track cover. The station logo is cached per URL.
+     */
+    private suspend fun resolveLiveContext(title: String?) {
+        if (title == lastSourceProbeTitle) return
+        lastSourceProbeTitle = title
+        val id = activePlayerId ?: return
+        try {
+            val player = ServiceLocator.api.getPlayer(id) ?: return
+            val isLive = player.currentMedia?.mediaType == "radio"
+            if (!isLive) {
+                coordinator.setLiveContext(false, null)
+                return
+            }
+            // The queue lives on the active source; its current item carries the station logo.
+            val sourceId = player.activeSource?.takeIf { it.isNotBlank() } ?: id
+            val q = ServiceLocator.api.getPlayerQueue(sourceId)
+            val stationImg = q?.currentItem?.image ?: q?.currentItem?.mediaItem?.image
+            val stationUrl = stationImg?.let { getImageUrl(it) }
+            if (stationUrl != null && stationUrl != cachedStationUrl) {
+                cachedStationBytes = ServiceLocator.getArtworkPipeline().fetch(stationUrl)
+                cachedStationUrl = stationUrl
+                Log.d(TAG, "radio station logo: $stationUrl (${cachedStationBytes?.size ?: 0} bytes)")
+            }
+            coordinator.setLiveContext(true, cachedStationBytes)
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveLiveContext failed: ${e.message}")
         }
     }
 

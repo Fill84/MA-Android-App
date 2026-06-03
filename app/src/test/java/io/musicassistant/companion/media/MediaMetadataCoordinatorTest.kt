@@ -142,6 +142,47 @@ class MediaMetadataCoordinatorTest {
     }
 
     @Test
+    fun `live context makes radio without per-track art use station logo and single-item`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val station = byteArrayOf(0x55, 0x66)
+        val pipeline: ArtworkPipeline = mockk()
+        coEvery { pipeline.cachedOrNull(any()) } returns null
+        coEvery { pipeline.fetch(any()) } returns null
+        val c = makeCoordinator(pipeline = pipeline, dispatcher = dispatcher)
+
+        c.setLiveContext(isLive = true, stationBytes = station)
+        c.pushSendspinMetadata("So Good", "CamelPhat", null, artworkUrl = null)
+        advanceUntilIdle()
+
+        val snap = c.snapshot.value
+        assertTrue(snap.isLive)
+        assertNull(snap.prev)
+        assertNull(snap.next)
+        assertArrayEquals(station, snap.current.artworkBytes)
+        assertEquals("So Good", snap.current.title)
+    }
+
+    @Test
+    fun `late live context upgrades app-icon fallback to station logo in place`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val station = byteArrayOf(0x55, 0x66)
+        val pipeline: ArtworkPipeline = mockk()
+        coEvery { pipeline.cachedOrNull(any()) } returns null
+        coEvery { pipeline.fetch(any()) } returns null
+        val c = makeCoordinator(pipeline = pipeline, dispatcher = dispatcher)
+
+        // Track arrives with no art before we know it's radio → app-icon fallback.
+        c.pushSendspinMetadata("So Good", "CamelPhat", null, artworkUrl = null)
+        advanceUntilIdle()
+        assertArrayEquals(fallbackBytes, c.snapshot.value.current.artworkBytes)
+
+        // Probe completes: radio + station logo → upgrade the current track in place.
+        c.setLiveContext(isLive = true, stationBytes = station)
+        assertArrayEquals(station, c.snapshot.value.current.artworkBytes)
+        assertTrue(c.snapshot.value.isLive)
+    }
+
+    @Test
     fun `stale fetch result is discarded when newer update has arrived`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val pipeline: ArtworkPipeline = mockk()

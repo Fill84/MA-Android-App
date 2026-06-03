@@ -50,6 +50,14 @@ class MediaMetadataCoordinator(
     private val lastBytesByTrackId = mutableMapOf<String, ByteArray>()
 
     /**
+     * Source context, set by the service after probing the player: whether the current source is
+     * live (radio) and the station's logo bytes. Drives the single-item timeline and the radio
+     * fallback chain: per-track cover → station logo → app-icon fallback.
+     */
+    private data class LiveContext(val isLive: Boolean, val stationBytes: ByteArray?)
+    @Volatile private var liveContext = LiveContext(false, null)
+
+    /**
      * Push a full queue/player update. `current` is required; `prev`/`next` may be null.
      * Set [isLive] for radio/live streams (forces null neighbors).
      */
@@ -60,6 +68,7 @@ class MediaMetadataCoordinator(
         isLive: Boolean = false
     ) {
         val myToken = sequence.incrementAndGet()
+        liveContext = liveContext.copy(isLive = isLive)
 
         // Resolve the current track's bytes from the cache exactly once, and reuse the
         // result for both the immediate emit and the "do we need to fetch?" decision.
@@ -101,13 +110,22 @@ class MediaMetadataCoordinator(
         val candidate = TrackMetadata(title = title, artist = artist, album = album, artworkUrl = artworkUrl, artworkBytes = null)
         val currentSnap = _snapshot.value
         val current = currentSnap.current
+        val ctx = liveContext
 
         val cached = artworkUrl?.takeIf { it.isNotBlank() }?.let { pipeline.cachedOrNull(it) }
         val bytes = cached
             ?: (if (current.trackId == candidate.trackId && current.hasArtwork) current.artworkBytes else null)
             ?: lastBytesByTrackId[candidate.trackId]
-            ?: fallbackBytes
-        emit(currentSnap.copy(current = candidate.copy(artworkBytes = bytes)))
+            ?: ctx.stationBytes      // radio station logo (track has no per-track cover)
+            ?: fallbackBytes         // app-icon (no station logo either)
+        emit(
+            currentSnap.copy(
+                current = candidate.copy(artworkBytes = bytes),
+                isLive = ctx.isLive,
+                prev = if (ctx.isLive) null else currentSnap.prev,
+                next = if (ctx.isLive) null else currentSnap.next
+            )
+        )
 
         if (cached == null && !artworkUrl.isNullOrBlank()) {
             scope.launch {
@@ -119,6 +137,32 @@ class MediaMetadataCoordinator(
                 }
             }
         }
+    }
+
+    /**
+     * Update the live/radio context (called by the service after probing the player + queue).
+     * [isLive] toggles the single-item timeline (no phantom prev/next). [stationBytes] is the radio
+     * station logo, used as the fallback for tracks with no per-track cover. If the current track is
+     * still showing the app-icon fallback and a station logo is now available, it's upgraded in place.
+     */
+    fun setLiveContext(isLive: Boolean, stationBytes: ByteArray?) {
+        liveContext = LiveContext(isLive, stationBytes)
+        val snap = _snapshot.value
+        val cur = snap.current
+        val curBytes = cur.artworkBytes
+        val upgraded = if (stationBytes != null && curBytes != null && curBytes.contentEquals(fallbackBytes)) {
+            cur.copy(artworkBytes = stationBytes)
+        } else {
+            cur
+        }
+        emit(
+            snap.copy(
+                current = upgraded,
+                isLive = isLive,
+                prev = if (isLive) null else snap.prev,
+                next = if (isLive) null else snap.next
+            )
+        )
     }
 
     /** Release the coroutine scope. Call from MusicService.onDestroy. */
