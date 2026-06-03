@@ -188,12 +188,22 @@ class MaApi(private val client: MaApiClient) {
         }
 
         suspend fun queueDeleteItem(queueId: String, queueItemId: String) {
+                // MA `player_queues/delete_item` expects `item_id_or_index` (int | str); we pass the
+                // queue item id string. NOTE: `move_item` (above) correctly uses `queue_item_id`.
                 client.sendCommand(
                         "player_queues/delete_item",
                         mapOf(
                                 "queue_id" to JsonPrimitive(queueId),
-                                "queue_item_id" to JsonPrimitive(queueItemId)
+                                "item_id_or_index" to JsonPrimitive(queueItemId)
                         )
+                )
+        }
+
+        /** Remove all items from the queue. WS: `player_queues/clear` (skip_stop defaults to false). */
+        suspend fun queueClear(queueId: String) {
+                client.sendCommand(
+                        "player_queues/clear",
+                        mapOf("queue_id" to JsonPrimitive(queueId))
                 )
         }
 
