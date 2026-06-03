@@ -14,7 +14,6 @@ import io.musicassistant.companion.data.model.PlayerQueue
 import io.musicassistant.companion.data.model.PlayerState
 import io.musicassistant.companion.data.model.QueueItem
 import io.musicassistant.companion.data.settings.SettingsModule
-import io.musicassistant.companion.media.NativeMediaManager
 import io.musicassistant.companion.service.ServiceLocator
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +40,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val api: MaApi = ServiceLocator.api
     private val apiClient: MaApiClient = ServiceLocator.apiClient
-    private val mediaManager: NativeMediaManager = ServiceLocator.getMediaManager(application)
     private val settingsRepo = SettingsModule.getRepository(application)
 
     private val json = Json {
@@ -112,17 +110,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     val currentPositionMs: Long
         get() {
-            if (_uiDurationMs <= 0) return mediaManager.currentPositionMs
             val base = _uiElapsedMs
             return if (_uiIsPlaying) {
                 val delta = android.os.SystemClock.elapsedRealtime() - _uiElapsedAtMs
-                (base + delta).coerceIn(0L, _uiDurationMs)
+                val pos = base + delta
+                if (_uiDurationMs > 0) pos.coerceIn(0L, _uiDurationMs) else pos.coerceAtLeast(0L)
             } else {
                 base.coerceAtLeast(0L)
             }
         }
     val durationMs: Long
-        get() = if (_uiDurationMs > 0) _uiDurationMs else mediaManager.durationMs
+        get() = if (_uiDurationMs > 0) _uiDurationMs else 0L
 
     // Whether the current media item is a live stream (radio, etc.)
     private val _isLive = MutableStateFlow(false)
@@ -337,7 +335,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val playerId = _activePlayer.value?.playerId ?: return
         lastUserActionMs = android.os.SystemClock.elapsedRealtime()
         _isPlaying.value = true
-        mediaManager.play()
         viewModelScope.launch {
             try {
                 api.playerPlay(playerId)
@@ -351,7 +348,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val playerId = _activePlayer.value?.playerId ?: return
         lastUserActionMs = android.os.SystemClock.elapsedRealtime()
         _isPlaying.value = false
-        mediaManager.pause()
         viewModelScope.launch {
             try {
                 api.playerPause(playerId)

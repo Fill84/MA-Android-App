@@ -5,6 +5,7 @@ import io.musicassistant.companion.data.model.Artist
 import io.musicassistant.companion.data.model.BrowseItem
 import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Player
+import io.musicassistant.companion.data.model.PlayerConfig
 import io.musicassistant.companion.data.model.PlayerQueue
 import io.musicassistant.companion.data.model.Playlist
 import io.musicassistant.companion.data.model.QueueItem
@@ -13,6 +14,7 @@ import io.musicassistant.companion.data.model.SearchResults
 import io.musicassistant.companion.data.model.Track
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 
@@ -81,6 +83,38 @@ class MaApi(private val client: MaApiClient) {
                                 "position" to JsonPrimitive(positionSeconds)
                         )
                 )
+        }
+
+        // ── Player Config ───────────────────────────────────────
+
+        /** Full config (schema + current values) for a player. WS: `config/players/get`. */
+        suspend fun getPlayerConfig(playerId: String): PlayerConfig {
+                val result =
+                        client.sendCommand(
+                                "config/players/get",
+                                mapOf("player_id" to JsonPrimitive(playerId))
+                        )
+                return json.decodeFromJsonElement(PlayerConfig.serializer(), result)
+        }
+
+        /**
+         * Save one or more config values for a player and return the updated config. WS:
+         * `config/players/save` with a `values` dict (keys may also include `name`/`enabled`).
+         * There is no per-key set command — writes batch through this `save`.
+         */
+        suspend fun savePlayerConfig(
+                playerId: String,
+                values: Map<String, JsonElement>
+        ): PlayerConfig {
+                val result =
+                        client.sendCommand(
+                                "config/players/save",
+                                mapOf(
+                                        "player_id" to JsonPrimitive(playerId),
+                                        "values" to JsonObject(values)
+                                )
+                        )
+                return json.decodeFromJsonElement(PlayerConfig.serializer(), result)
         }
 
         // ── Player Queue ────────────────────────────────────────

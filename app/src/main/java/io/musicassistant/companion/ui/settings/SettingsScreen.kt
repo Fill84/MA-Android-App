@@ -53,10 +53,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import io.musicassistant.companion.BuildConfig
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.data.settings.ThemeMode
 import io.musicassistant.companion.service.ServiceLocator
+import io.musicassistant.companion.ui.HomeShortcut
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -259,6 +261,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                         currentMode = currentSettings.themeMode,
                         onModeSelected = { scope.launch { settingsRepository.setThemeMode(it) } }
                 )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // HOME SCREEN SECTION
+            SectionHeader("HOME SCREEN")
+            SettingsCard {
+                Text(
+                        text = "Add a Music Assistant shortcut to your home screen.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                        onClick = {
+                            val requested = HomeShortcut.request(context)
+                            Toast.makeText(
+                                    context,
+                                    if (requested) "Confirm the dialog, then check your home screen"
+                                    else "Your launcher doesn't support adding shortcuts",
+                                    Toast.LENGTH_LONG
+                            ).show()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                ) { Text("Add to home screen") }
             }
 
             Spacer(modifier = Modifier.height(24.dp))

@@ -9,7 +9,11 @@ import io.musicassistant.companion.data.sendspin.SendspinConfig
 import io.musicassistant.companion.data.sendspin.audio.AudioStreamManager
 import io.musicassistant.companion.data.sendspin.audio.Codecs
 import io.musicassistant.companion.auto.AutoBrowseCallback
-import io.musicassistant.companion.media.NativeMediaManager
+import io.musicassistant.companion.media.ArtworkFallback
+import io.musicassistant.companion.media.ArtworkPipeline
+import io.musicassistant.companion.media.MaPlayer
+import io.musicassistant.companion.media.MediaMetadataCoordinator
+import io.musicassistant.companion.media.MediaSessionHost
 import io.musicassistant.companion.media.StreamAudioPlayer
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -39,7 +43,58 @@ object ServiceLocator {
     var sendspinClient: SendspinClient? = null
         private set
 
-    @Volatile private var mediaManager: NativeMediaManager? = null
+    // ── New media stack (Coordinator/MaPlayer/MediaSessionHost) ──────────
+    // Shared singletons used by both MusicService (notification, command routing) and
+    // AutoMediaService (onGetSession). Exactly one MediaLibrarySession exists.
+    @Volatile private var _artworkPipeline: ArtworkPipeline? = null
+    @Volatile private var _coordinator: MediaMetadataCoordinator? = null
+    @Volatile private var _mediaPlayer: MaPlayer? = null
+    @Volatile private var _mediaSessionHost: MediaSessionHost? = null
+
+    fun getArtworkPipeline(): ArtworkPipeline =
+        _artworkPipeline ?: synchronized(this) {
+            _artworkPipeline ?: ArtworkPipeline(
+                baseHttpClient = httpClient,
+                authTokenProvider = { apiClient.currentAuthToken }
+            ).also { _artworkPipeline = it }
+        }
+
+    fun getCoordinator(context: Context): MediaMetadataCoordinator =
+        _coordinator ?: synchronized(this) {
+            _coordinator ?: MediaMetadataCoordinator(
+                pipeline = getArtworkPipeline(),
+                fallbackBytes = ArtworkFallback(context.applicationContext).bytes
+            ).also { _coordinator = it }
+        }
+
+    fun getMediaPlayer(context: Context): MaPlayer =
+        _mediaPlayer ?: synchronized(this) {
+            _mediaPlayer ?: MaPlayer(
+                looper = android.os.Looper.getMainLooper(),
+                snapshotFlow = getCoordinator(context).snapshot
+            ).also { _mediaPlayer = it }
+        }
+
+    /** Lazily builds the one MediaLibrarySession. Safe to call from MusicService or AutoMediaService. */
+    fun getMediaSessionHost(context: Context): MediaSessionHost =
+        _mediaSessionHost ?: synchronized(this) {
+            _mediaSessionHost ?: MediaSessionHost(
+                context = context.applicationContext,
+                player = getMediaPlayer(context),
+                browseCallback = getOrCreateAutoBrowseCallback()
+            ).also { _mediaSessionHost = it }
+        }
+
+    fun releaseMediaStack() {
+        synchronized(this) {
+            _mediaSessionHost?.release()
+            _mediaSessionHost = null
+            _coordinator?.release()
+            _coordinator = null
+            _mediaPlayer = null
+            _artworkPipeline = null
+        }
+    }
 
     /** Shared browse callback for Android Auto. Created once by MusicService. */
     @Volatile private var _autoBrowseCallback: AutoBrowseCallback? = null
@@ -152,16 +207,6 @@ object ServiceLocator {
         )
     }
 
-    fun getMediaManager(context: Context): NativeMediaManager {
-        return mediaManager
-            ?: synchronized(this) {
-                mediaManager
-                    ?: NativeMediaManager(context.applicationContext).also {
-                        mediaManager = it
-                    }
-            }
-    }
-
     /** Destroy pipeline components (on logout or full cleanup). */
     fun destroyPipeline() {
         audioStreamManager?.close()
@@ -177,7 +222,6 @@ object ServiceLocator {
         sendspinClient?.destroy()
         sendspinClient = null
         destroyPipeline()
-        mediaManager?.release()
-        mediaManager = null
+        releaseMediaStack()
     }
 }

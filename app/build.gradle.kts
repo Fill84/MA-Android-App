@@ -13,8 +13,8 @@ android {
         applicationId = "io.musicassistant.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "4.0.0"
+        versionCode = 8
+        versionName = "5.0.0"
     }
 
     signingConfigs {
@@ -51,6 +51,14 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        // Let android.* stubs (Log, BitmapFactory, ...) return defaults instead of
+        // throwing "not mocked" in plain JVM unit tests. Robolectric tests run the real
+        // framework on the JVM (no device) to verify what a MediaController/Bluetooth reads.
+        unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -85,4 +93,11 @@ dependencies {
     implementation(libs.concentus)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    testImplementation(libs.junit4)
+    testImplementation(libs.mockk)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.turbine)
+    testImplementation(libs.robolectric)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

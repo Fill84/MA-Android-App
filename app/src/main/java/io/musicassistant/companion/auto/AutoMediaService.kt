@@ -10,9 +10,9 @@ import io.musicassistant.companion.service.ServiceLocator
 /**
  * MediaLibraryService for Android Auto integration.
  *
- * Returns the shared MediaLibrarySession from NativeMediaManager so Android Auto
- * can browse the MA library and control playback. MusicService remains responsible
- * for connections, Sendspin audio, and notification management.
+ * Returns the shared MediaLibrarySession from ServiceLocator's MediaSessionHost so Android
+ * Auto can browse the MA library and control playback. MusicService remains responsible for
+ * connections, Sendspin audio, and notification management.
  */
 class AutoMediaService : MediaLibraryService() {
 
@@ -30,18 +30,12 @@ class AutoMediaService : MediaLibraryService() {
         }
         startService(intent)
 
-        // Set app context on the browse callback so it can access settings
-        val mediaManager = ServiceLocator.getMediaManager(this)
-        val session = mediaManager.mediaSession
-        if (session is MediaLibrarySession) {
-            val callback = ServiceLocator.autoBrowseCallback
-            callback?.appContext = applicationContext
-        }
+        // Give the browse callback an app context so it can read settings.
+        ServiceLocator.getOrCreateAutoBrowseCallback().appContext = applicationContext
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
-        val session = ServiceLocator.getMediaManager(this).mediaSession
-        return session as? MediaLibrarySession
+        return ServiceLocator.getMediaSessionHost(this).session
     }
 
     override fun onDestroy() {
