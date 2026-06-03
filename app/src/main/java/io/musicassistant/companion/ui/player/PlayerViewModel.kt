@@ -466,6 +466,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun clearQueue() {
+        val q = _queue.value ?: return
+        viewModelScope.launch {
+            try {
+                api.queueClear(q.queueId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Clear queue failed: ${e.message}")
+                _userMessage.tryEmit("Could not clear queue")
+            }
+        }
+    }
+
     fun moveQueueItem(queueItemId: String, positionShift: Int) {
         val q = _queue.value ?: return
         viewModelScope.launch {
