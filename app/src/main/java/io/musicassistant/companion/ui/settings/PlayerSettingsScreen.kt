@@ -36,12 +36,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,7 +64,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun PlayerSettingsScreen(
         player: Player?,
-        onBack: () -> Unit
+        onBack: () -> Unit,
+        configViewModel: PlayerConfigViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val settingsRepository = remember { SettingsModule.getRepository(context) }
@@ -70,6 +73,12 @@ fun PlayerSettingsScreen(
     val scope = rememberCoroutineScope()
 
     val currentSettings = settings ?: return
+
+    // Music Assistant server-side config for this player (dynamic schema).
+    val configState by configViewModel.state.collectAsState()
+    LaunchedEffect(player?.playerId) {
+        player?.playerId?.let { configViewModel.load(it) }
+    }
 
     val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
             .compositeOver(MaterialTheme.colorScheme.background)
@@ -208,6 +217,17 @@ fun PlayerSettingsScreen(
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                // MUSIC ASSISTANT SERVER SETTINGS (dynamic schema)
+                if (player != null) {
+                    PlayerConfigSection(
+                            state = configState,
+                            onValueChange = configViewModel::setValue,
+                            onSave = configViewModel::save,
+                            onRetry = { configViewModel.load(player.playerId) },
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
 
                 // INFO SECTION
                 SectionHeader("INFO")
