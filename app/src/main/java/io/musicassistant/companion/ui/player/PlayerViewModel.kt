@@ -13,8 +13,10 @@ import io.musicassistant.companion.data.model.Player
 import io.musicassistant.companion.data.model.PlayerQueue
 import io.musicassistant.companion.data.model.PlayerState
 import io.musicassistant.companion.data.model.QueueItem
+import io.musicassistant.companion.data.player.PlayerSession
 import io.musicassistant.companion.data.settings.SettingsModule
 import io.musicassistant.companion.service.ServiceLocator
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -22,6 +24,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -40,6 +44,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val api: MaApi = ServiceLocator.api
     private val apiClient: MaApiClient = ServiceLocator.apiClient
+    private val repo = ServiceLocator.playerRepository
     private val settingsRepo = SettingsModule.getRepository(application)
 
     private val json = Json {
@@ -54,15 +59,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         catch (e: Exception) { Log.w(TAG, "Parse Player from event failed: ${e.message}"); null }
     }
 
-    private fun tryParsePlayerQueue(data: JsonElement?): PlayerQueue? {
-        data ?: return null
-        return try { json.decodeFromJsonElement(PlayerQueue.serializer(), data) }
-        catch (e: Exception) { Log.w(TAG, "Parse PlayerQueue from event failed: ${e.message}"); null }
-    }
-
-    // Current active player
+    // Current active player (the command target — usually this device's own player).
     private val _activePlayer = MutableStateFlow<Player?>(null)
     val activePlayer: StateFlow<Player?> = _activePlayer.asStateFlow()
+
+    /** The player id whose session feeds the UI; null until selected/auto-selected. */
+    private val selectedId = MutableStateFlow<String?>(null)
 
     // Queue state
     private val _queue = MutableStateFlow<PlayerQueue?>(null)
@@ -126,9 +128,56 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _isLive = MutableStateFlow(false)
     val isLive: StateFlow<Boolean> = _isLive.asStateFlow()
 
+    /** This device's own player id (e.g. the Sendspin "Pixel 5" player), loaded once. */
+    private var ownPlayerId: String? = null
+
     init {
         observeConnection()
         observeEvents()
+        observeSelectedSession()
+        autoSelectPlayingPlayer()
+        viewModelScope.launch {
+            runCatching { ownPlayerId = settingsRepo.settingsFlow.first().playerId }
+        }
+    }
+
+    /**
+     * Auto-select a player for the now-playing UI (mini-player) when the user hasn't picked one.
+     * Reacts to the player list so it works regardless of HOW/WHEN our Sendspin player (e.g.
+     * "Pixel 5") registers after an app restart — the earlier approach waited for a specific event
+     * that didn't reliably fire, leaving the bar empty while music played. Prefers our own playing
+     * player, then any playing player, then our own (any state). Stops once anything is selected, so
+     * a manual selection always wins.
+     */
+    private fun autoSelectPlayingPlayer() {
+        _players
+                .onEach { list ->
+                    if (_activePlayer.value != null) return@onEach
+                    val pick = list.firstOrNull { it.playerId == ownPlayerId && it.state == PlayerState.PLAYING }
+                            ?: list.firstOrNull { it.state == PlayerState.PLAYING }
+                            ?: list.firstOrNull { it.playerId == ownPlayerId }
+                    if (pick != null) {
+                        Log.d(TAG, "auto-select now-playing: ${pick.playerId} (${pick.name}) state=${pick.state}")
+                        applyActivePlayer(pick)
+                    }
+                }
+                .launchIn(viewModelScope)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun observeSelectedSession() {
+        selectedId
+            .flatMapLatest { id -> if (id == null) flowOf(null) else repo.session(id) }
+            .onEach { session: PlayerSession? ->
+                if (session != null) {
+                    session.player?.let { _activePlayer.value = it }
+                    setIsPlayingFromServer(session.isPlaying)
+                    _queue.value = session.queue
+                    _queueItems.value = session.queueItems
+                    updateMetadataFromQueue()
+                }
+            }
+            .launchIn(viewModelScope)
     }
 
     private fun observeConnection() {
@@ -145,44 +194,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private fun loadInitialData() {
         viewModelScope.launch {
             try {
-                val allPlayers = api.getPlayers()
-                _players.value = allPlayers
-
-                // Always prefer this device's own Sendspin player
-                val settings = settingsRepo.settingsFlow.first()
-                val ourPlayer = allPlayers.find { it.playerId == settings.playerId }
-                if (ourPlayer != null) {
-                    _activePlayer.value = ourPlayer
-                    _isPlaying.value = ourPlayer.state == PlayerState.PLAYING
-                    loadQueue(ourPlayer.playerId)
-                } else if (_activePlayer.value == null) {
-                    // Our player isn't registered yet — don't pick a random one.
-                    // It will be auto-selected when player_added event arrives.
-                    Log.d(
-                            TAG,
-                            "Own player ${settings.playerId} not in list yet, waiting for registration"
-                    )
-                }
+                // Selection is handled reactively by [autoSelectPlayingPlayer]; just publish the list.
+                _players.value = api.getPlayers()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load initial data: ${e.message}")
             }
         }
     }
 
-    private fun loadQueue(queueId: String) {
-        viewModelScope.launch {
-            try {
-                _queue.value = api.getPlayerQueue(queueId) ?: return@launch
-                _queueItems.value = api.getPlayerQueueItems(queueId)
-                updateMetadataFromQueue()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load queue: ${e.message}")
-                // Queue doesn't exist for this player — clear metadata
-                _queue.value = null
-                _queueItems.value = emptyList()
-                updateMetadataFromQueue()
-            }
-        }
+    /** Make [player] the active (command-target) player. Queue/metadata come from the session. */
+    private fun applyActivePlayer(player: Player) {
+        _activePlayer.value = player
+        _isPlaying.value = player.state == PlayerState.PLAYING
+        selectedId.value = player.playerId
     }
 
     private fun observeEvents() {
@@ -191,8 +215,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 .onEach { event ->
                     when (event.event) {
                         "player_added", "player_updated" -> handlePlayerUpdated(event)
-                        "queue_updated" -> handleQueueUpdated(event)
-                        "queue_items_updated" -> handleQueueItemsUpdated(event)
                     }
                 }
                 .launchIn(viewModelScope)
@@ -204,76 +226,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 if (changedId != null && !isAdded) {
-                    // Use event data directly (avoids extra round-trip); fallback to fetch
                     val updated = tryParsePlayer(event.data) ?: api.getPlayer(changedId) ?: return@launch
-                    _players.value =
-                            _players.value.map { if (it.playerId == changedId) updated else it }
-                    if (_activePlayer.value?.playerId == changedId) {
-                        _activePlayer.value = updated
-                        // Don't update isPlaying here — queue_updated is authoritative for play state.
-                        // player_updated can have transitional states that cause flicker.
-                        updateMetadataFromQueue()
+                    _players.value = if (_players.value.any { it.playerId == changedId }) {
+                        _players.value.map { if (it.playerId == changedId) updated else it }
+                    } else {
+                        _players.value + updated
                     }
                 } else {
-                    // player_added or no objectId — full refresh to pick up new players
-                    val allPlayers = api.getPlayers()
-                    _players.value = allPlayers
-
-                    val currentId = _activePlayer.value?.playerId
-                    if (currentId != null) {
-                        val updated = allPlayers.find { it.playerId == currentId }
-                        _activePlayer.value = updated
-                        // isPlaying driven by queue_updated, not player_updated
-                    } else {
-                        // Auto-select our own device if it just appeared
-                        val settings = settingsRepo.settingsFlow.first()
-                        val ourPlayer = allPlayers.find { it.playerId == settings.playerId }
-                        if (ourPlayer != null) {
-                            Log.d(TAG, "Auto-selecting own player: ${ourPlayer.playerId}")
-                            _activePlayer.value = ourPlayer
-                            _isPlaying.value = ourPlayer.state == PlayerState.PLAYING
-                            loadQueue(ourPlayer.playerId)
-                        }
-                    }
+                    // player_added or no objectId — full refresh to pick up new players.
+                    _players.value = api.getPlayers()
                 }
+                // Active player / queue / metadata are driven reactively by [observeSelectedSession];
+                // [autoSelectPlayingPlayer] reacts to the list update when nothing is selected yet.
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to refresh players: ${e.message}")
-            }
-        }
-    }
-
-    private fun handleQueueUpdated(event: MaApiClient.MaEvent) {
-        val queueId = _activePlayer.value?.playerId ?: return
-        // Only process events for the active queue
-        if (event.objectId != null && event.objectId != queueId) return
-        viewModelScope.launch {
-            try {
-                val prevItemId = _queue.value?.currentItem?.queueItemId
-                // Use event data directly (avoids extra round-trip); fallback to fetch
-                val q = tryParsePlayerQueue(event.data) ?: api.getPlayerQueue(queueId) ?: return@launch
-                _queue.value = q
-                setIsPlayingFromServer(q.state == PlayerState.PLAYING)
-
-                if (q.currentItem?.queueItemId != prevItemId) {
-                    // Track changed — full UI metadata update
-                    updateMetadataFromQueue()
-                } else {
-                    // Same track — update elapsed time for UI seekbar
-                    updateElapsedTimeFromQueue()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh queue: ${e.message}")
-            }
-        }
-    }
-
-    private fun handleQueueItemsUpdated(event: MaApiClient.MaEvent) {
-        val queueId = _activePlayer.value?.playerId ?: return
-        viewModelScope.launch {
-            try {
-                _queueItems.value = api.getPlayerQueueItems(queueId)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh queue items: ${e.message}")
             }
         }
     }
@@ -466,6 +432,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun clearQueue() {
+        val q = _queue.value ?: return
+        viewModelScope.launch {
+            try {
+                api.queueClear(q.queueId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Clear queue failed: ${e.message}")
+                _userMessage.tryEmit("Could not clear queue")
+            }
+        }
+    }
+
     fun moveQueueItem(queueItemId: String, positionShift: Int) {
         val q = _queue.value ?: return
         viewModelScope.launch {
@@ -498,9 +476,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectPlayer(playerId: String) {
         val selected = _players.value.find { it.playerId == playerId }
-        _activePlayer.value = selected
-        _isPlaying.value = selected?.state == PlayerState.PLAYING
-        loadQueue(playerId)
+        if (selected != null) {
+            applyActivePlayer(selected)
+        } else {
+            // Player not in the loaded list — subscribe to session; queue arrives reactively.
+            _activePlayer.value = null
+            selectedId.value = playerId
+        }
     }
 
     fun getImageUrl(imagePath: String): String {

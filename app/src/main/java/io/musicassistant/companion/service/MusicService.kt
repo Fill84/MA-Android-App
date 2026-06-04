@@ -24,6 +24,7 @@ import io.musicassistant.companion.data.api.MaApiClient
 import io.musicassistant.companion.data.model.ConnectionState
 import io.musicassistant.companion.data.model.MediaItemImage
 import io.musicassistant.companion.data.model.MediaType
+import io.musicassistant.companion.data.model.Player
 import io.musicassistant.companion.data.model.PlayerQueue
 import io.musicassistant.companion.data.model.PlayerState
 import io.musicassistant.companion.data.sendspin.SendspinClient
@@ -33,6 +34,7 @@ import io.musicassistant.companion.media.MaPlayer
 import io.musicassistant.companion.media.MediaMetadataCoordinator
 import io.musicassistant.companion.media.MediaSessionHost
 import io.musicassistant.companion.media.TrackMetadata
+import io.musicassistant.companion.media.resolveNeighbors
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -483,6 +485,74 @@ class MusicService : LifecycleService() {
         }
     }
 
+    /**
+     * Push the now-playing track from the authoritative MA source for group/source players. Their
+     * device queue (`ma_<id>`) is empty — the real now-playing media, cover, and queue live on
+     * `player.active_source` (`upma_<id>`). The normal [updateMetadataFromQueue] path bails on the
+     * empty device queue, so for these players the session would otherwise only get the artwork-less
+     * Sendspin metadata (app-icon fallback, no neighbors). Mirrors the queue path but sources the
+     * current track (incl. real cover) from `current_media` and prev/next from the active-source
+     * queue's index/length. Standalone players (active_source == device queue) keep the existing
+     * event-driven path and are skipped here. Radio is handled by [resolveLiveContext] (live context)
+     * and never reaches this method.
+     */
+    private suspend fun pushTrackFromSource(player: Player) {
+        val id = activePlayerId ?: return
+        val deviceQueueId = activeQueueId ?: id
+        val sourceId = player.activeSource?.takeIf { it.isNotBlank() } ?: return
+        if (sourceId == deviceQueueId) return // standalone player → existing queue path handles it
+
+        val cm = player.currentMedia ?: return
+        val title = cm.title?.takeIf { it.isNotBlank() } ?: return
+        val coverUrl = cm.imageUrl?.takeIf { it.isNotBlank() }?.let { resolveArtworkUrl(it) }
+        val current = TrackMetadata(title, cm.artist ?: "", cm.album, coverUrl, null)
+
+        val q = try { ServiceLocator.api.getPlayerQueue(sourceId) } catch (e: Exception) { null }
+        val idx = q?.currentIndex
+        val total = q?.items ?: 0
+        // Resolve prev/next strictly by queue index (MA's queue.next_item is unreliable while
+        // streaming — it can echo the current item). One windowed fetch around the current index:
+        // window starts at idx-1 (clamped to 0), so [prev, current, next] for idx>0, else [current, next].
+        val window = if (idx != null && total > 0) {
+            try {
+                ServiceLocator.api.getPlayerQueueItems(sourceId, limit = 3, offset = (idx - 1).coerceAtLeast(0))
+            } catch (e: Exception) { emptyList() }
+        } else emptyList()
+        val prevCandidate = if (idx != null && idx > 0) window.getOrNull(0)?.let { queueItemToTrack(it) } else null
+        val nextCandidate = when {
+            idx == null -> null
+            idx == 0 -> window.getOrNull(1)?.let { queueItemToTrack(it) }
+            else -> window.getOrNull(2)?.let { queueItemToTrack(it) }
+        }
+        val (prev, next) = resolveNeighbors(isLive = false, currentIndex = idx, total = total,
+            prevCandidate = prevCandidate, nextCandidate = nextCandidate)
+
+        Log.d(TAG, "source nowplaying: '$title' cover=$coverUrl idx=$idx/$total prev=${prev?.title} next=${next?.title}")
+        coordinator.pushQueueUpdate(current = current, prev = prev, next = next, isLive = false)
+        currentQueueItemId = q?.currentItem?.queueItemId
+
+        val durMs = cm.duration?.let { (it * 1000).toLong() } ?: C.TIME_UNSET
+        mediaPlayer.setKnownDuration(if (durMs > 0) durMs else C.TIME_UNSET)
+        val elapsedMs = ((cm.elapsedTime ?: 0.0) * 1000).toLong()
+        mediaPlayer.setKnownElapsed(elapsedMs, player.state == PlayerState.PLAYING)
+        if ((player.state == PlayerState.PLAYING) != playingState.value) {
+            setLocalPlaying(player.state == PlayerState.PLAYING)
+        }
+    }
+
+    /** Build [TrackMetadata] from a queue item (prefers its media-item fields, falls back to the item). */
+    private fun queueItemToTrack(item: io.musicassistant.companion.data.model.QueueItem): TrackMetadata {
+        val mi = item.mediaItem
+        val img = mi?.image ?: item.image
+        return TrackMetadata(
+            title = mi?.name?.takeIf { it.isNotBlank() } ?: item.name,
+            artist = mi?.artists?.joinToString(", ") { it.name } ?: "",
+            album = mi?.album?.name,
+            artworkUrl = img?.let { getImageUrl(it) },
+            artworkBytes = null
+        )
+    }
+
     private fun refreshMetadataFromServer() {
         val queueId = activeQueueId ?: activePlayerId ?: return
         lifecycleScope.launch {
@@ -515,6 +585,9 @@ class MusicService : LifecycleService() {
             val isLive = player.currentMedia?.mediaType == "radio"
             if (!isLive) {
                 coordinator.setLiveContext(false, null)
+                // Group/source players have an empty device queue, so the event-driven queue path
+                // never fires — push the real now-playing (cover + neighbors) from the active source.
+                pushTrackFromSource(player)
                 return
             }
             // The queue lives on the active source; its current item carries the station logo.

@@ -2,6 +2,7 @@ package io.musicassistant.companion.ui.settings
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -24,6 +30,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -47,6 +55,7 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -291,12 +300,34 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             // ABOUT SECTION
+            val uriHandler = LocalUriHandler.current
             SectionHeader("ABOUT")
             SettingsCard {
                 InfoItem(title = "Version", value = BuildConfig.VERSION_NAME)
                 InfoItem(
                         title = "Application",
                         value = "Music Assistant Companion v${BuildConfig.VERSION_NAME}"
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                LinkItem(
+                        icon = Icons.Filled.Code,
+                        title = "Source code",
+                        subtitle = "GitHub repository",
+                        onClick = { uriHandler.openUri("https://github.com/Fill84/MA-Android-App-2.0") },
+                )
+                LinkItem(
+                        icon = Icons.Filled.BugReport,
+                        title = "Report an issue",
+                        subtitle = "Bugs & feature requests",
+                        onClick = { uriHandler.openUri("https://github.com/Fill84/MA-Android-App-2.0/issues") },
+                )
+                LinkItem(
+                        icon = Icons.Filled.Info,
+                        title = "Music Assistant",
+                        subtitle = "music-assistant.io",
+                        onClick = { uriHandler.openUri("https://www.music-assistant.io") },
                 )
             }
 
@@ -359,6 +390,47 @@ private fun InfoItem(title: String, value: String) {
                 text = value,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** A tappable row that opens an external [onClick] target, styled like [InfoItem] with a trailing open-in-new hint. */
+@Composable
+private fun LinkItem(
+        icon: androidx.compose.ui.graphics.vector.ImageVector,
+        title: String,
+        subtitle: String,
+        onClick: () -> Unit,
+) {
+    Row(
+            modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onClick)
+                    .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Icon(
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                contentDescription = "Opens in browser",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
         )
     }
 }

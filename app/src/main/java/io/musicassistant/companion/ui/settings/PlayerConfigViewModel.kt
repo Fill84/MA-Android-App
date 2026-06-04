@@ -18,12 +18,34 @@ import kotlinx.serialization.json.booleanOrNull
 
 // ── Pure config logic (shared by the ViewModel and the Compose screen) ──────────────────────────
 
+/** Synthetic config keys that map to top-level [PlayerConfig] fields rather than [PlayerConfig.values]. */
+internal const val NAME_KEY = "name"
+internal const val ENABLED_KEY = "enabled"
+
+/** Suffix of the server config-entry key that holds the preferred audio format (the "codec"). */
+internal const val CODEC_FORMAT_SUFFIX = "preferred_sendspin_format"
+
+/** The server-side audio-format entry, whose key ends with [CODEC_FORMAT_SUFFIX] (or null). */
+internal fun PlayerConfig.codecEntry(): ConfigEntry? =
+    values.values.firstOrNull { it.key.endsWith(CODEC_FORMAT_SUFFIX) }
+
+/**
+ * The server's current value for [key]. The synthetic [NAME_KEY]/[ENABLED_KEY] resolve to the
+ * top-level [PlayerConfig.name]/[PlayerConfig.enabled] fields (name falls back to `default_name`);
+ * everything else is an entry in [PlayerConfig.values].
+ */
+internal fun serverConfigValue(config: PlayerConfig, key: String): JsonElement? = when (key) {
+    NAME_KEY -> JsonPrimitive(config.name ?: config.defaultName ?: "")
+    ENABLED_KEY -> JsonPrimitive(config.enabled)
+    else -> config.values[key]?.value
+}
+
 /** Current value of [key]: the user's pending edit if present, otherwise the server value. */
 internal fun currentConfigValue(
     config: PlayerConfig,
     edited: Map<String, JsonElement>,
     key: String,
-): JsonElement? = edited[key] ?: config.values[key]?.value
+): JsonElement? = edited[key] ?: serverConfigValue(config, key)
 
 /**
  * Whether a [ConfigEntry] should be shown, given the current (edited-over-server) values. Mirrors
@@ -52,7 +74,7 @@ internal fun isConfigEntryVisible(
 internal fun configDirtyValues(
     config: PlayerConfig,
     edited: Map<String, JsonElement>,
-): Map<String, JsonElement> = edited.filter { (key, value) -> config.values[key]?.value != value }
+): Map<String, JsonElement> = edited.filter { (key, value) -> serverConfigValue(config, key) != value }
 
 /** Loose truthiness for `depends_on` checks: booleans by value, the `none` sentinel and blanks are false. */
 internal fun jsonTruthy(value: JsonElement?): Boolean {
@@ -111,7 +133,7 @@ class PlayerConfigViewModel internal constructor(
     /** Set [key] to [value]; an edit equal to the server value is dropped so it isn't counted dirty. */
     fun setValue(key: String, value: JsonElement) {
         _state.update { s ->
-            val serverValue = s.config?.values?.get(key)?.value
+            val serverValue = s.config?.let { serverConfigValue(it, key) }
             val edited = s.edited.toMutableMap()
             if (value == serverValue) edited.remove(key) else edited[key] = value
             s.copy(edited = edited)

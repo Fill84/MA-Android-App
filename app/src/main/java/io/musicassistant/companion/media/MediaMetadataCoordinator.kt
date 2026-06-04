@@ -185,7 +185,7 @@ class MediaMetadataCoordinator(
         Log.d(
             TAG,
             "emit: current=${snap.current.title}/${snap.current.artist} " +
-                "hasArt=${snap.current.hasArtwork} live=${snap.isLive} " +
+                "hasArt=${snap.current.hasArtwork} bytes=${snap.current.artworkBytes?.size} live=${snap.isLive} " +
                 "prev=${snap.prev?.title} next=${snap.next?.title}"
         )
     }

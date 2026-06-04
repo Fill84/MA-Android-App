@@ -20,9 +20,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -80,6 +83,8 @@ fun QueueScreen(playerViewModel: PlayerViewModel, onBack: () -> Unit) {
 
     val snackbarHostState = remember { SnackbarHostState() }
 
+    var showClearDialog by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         playerViewModel.userMessage.collect { message ->
             snackbarHostState.showSnackbar(message)
@@ -114,7 +119,7 @@ fun QueueScreen(playerViewModel: PlayerViewModel, onBack: () -> Unit) {
                         )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Queue",
                             style = MaterialTheme.typography.titleMedium,
@@ -126,6 +131,16 @@ fun QueueScreen(playerViewModel: PlayerViewModel, onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    // Clear-queue action — only when there is something to clear
+                    if (localItems.isNotEmpty()) {
+                        IconButton(onClick = { showClearDialog = true }) {
+                            Icon(
+                                Icons.Default.DeleteSweep,
+                                contentDescription = "Clear queue",
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
                     }
                 }
             }
@@ -219,6 +234,29 @@ fun QueueScreen(playerViewModel: PlayerViewModel, onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = { Text("Clear queue?") },
+            text = { Text("Remove all ${localItems.size} tracks from the queue? This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearDialog = false
+                        playerViewModel.clearQueue()
+                    }
+                ) {
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

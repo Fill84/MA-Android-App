@@ -9,7 +9,7 @@ import io.musicassistant.companion.data.sendspin.model.PlayerSupport
 import io.musicassistant.companion.data.sendspin.model.VersionedRole
 
 object SendspinCapabilities {
-    fun buildClientHello(config: SendspinConfig, codecPreference: Codec): ClientHelloPayload {
+    fun buildClientHello(config: SendspinConfig): ClientHelloPayload {
         return ClientHelloPayload(
             clientId = config.clientId,
             name = config.deviceName,
@@ -21,7 +21,7 @@ object SendspinCapabilities {
                 VersionedRole.METADATA_V1
             ),
             playerV1Support = PlayerSupport(
-                supportedFormats = buildSupportedFormats(codecPreference),
+                supportedFormats = buildSupportedFormats(),
                 bufferCapacity = config.bufferCapacityMicros,
                 supportedCommands = listOf()
             ),
@@ -33,21 +33,28 @@ object SendspinCapabilities {
         )
     }
 
-    private fun buildSupportedFormats(codecPreference: Codec): List<AudioFormatSpec> {
+    /**
+     * Advertise every codec the client can decode. The preferred format is a Music Assistant
+     * server-side setting (`preferred_sendspin_format`); the server offers one option per format we
+     * list here and picks per playback. So we advertise all codecs as a static capability.
+     */
+    private fun buildSupportedFormats(): List<AudioFormatSpec> {
         val sampleRates = listOf(44100, 48000)
         val bitDepths = listOf(16, 24, 32)
 
         return buildList {
-            for (sampleRate in sampleRates) {
-                for (bitDepth in bitDepths) {
-                    add(
-                        AudioFormatSpec(
-                            codec = codecPreference.sendspinAudioCodec,
-                            channels = 2,
-                            sampleRate = sampleRate,
-                            bitDepth = bitDepth
+            for (codec in Codec.entries) {
+                for (sampleRate in sampleRates) {
+                    for (bitDepth in bitDepths) {
+                        add(
+                            AudioFormatSpec(
+                                codec = codec.sendspinAudioCodec,
+                                channels = 2,
+                                sampleRate = sampleRate,
+                                bitDepth = bitDepth
+                            )
                         )
-                    )
+                    }
                 }
             }
         }

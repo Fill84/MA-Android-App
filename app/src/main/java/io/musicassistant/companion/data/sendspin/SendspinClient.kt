@@ -126,7 +126,7 @@ class SendspinClient(
             transport = sendspinTransport
 
             // Create message dispatcher
-            val capabilities = SendspinCapabilities.buildClientHello(config, config.codecPreference)
+            val capabilities = SendspinCapabilities.buildClientHello(config)
             val dispatcherConfig = MessageDispatcherConfig(
                 clientCapabilities = capabilities,
                 initialVolume = currentVolume,

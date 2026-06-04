@@ -96,7 +96,11 @@ internal fun PlayerConfigSection(
         }
 
         else -> {
-            val visible = config.values.values.filter { isConfigEntryVisible(it, config, state.edited) }
+            // The audio-format entry is surfaced as the "Audio codec" dropdown in PlayerSettingsScreen,
+            // so hide it here to avoid showing the same control twice.
+            val visible = config.values.values.filter {
+                isConfigEntryVisible(it, config, state.edited) && !it.key.endsWith(CODEC_FORMAT_SUFFIX)
+            }
             val grouped = visible.groupByTo(LinkedHashMap()) { it.category }
             grouped.forEach { (category, entries) ->
                 ConfigSectionHeader(categoryTitle(category))

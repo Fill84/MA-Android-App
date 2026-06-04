@@ -3,11 +3,14 @@ package io.musicassistant.companion.service
 import android.content.Context
 import io.musicassistant.companion.data.api.MaApi
 import io.musicassistant.companion.data.api.MaApiClient
+import io.musicassistant.companion.data.player.PlayerRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import io.musicassistant.companion.data.sendspin.ClockSynchronizer
 import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.data.sendspin.SendspinConfig
 import io.musicassistant.companion.data.sendspin.audio.AudioStreamManager
-import io.musicassistant.companion.data.sendspin.audio.Codecs
 import io.musicassistant.companion.auto.AutoBrowseCallback
 import io.musicassistant.companion.media.ArtworkFallback
 import io.musicassistant.companion.media.ArtworkPipeline
@@ -38,6 +41,12 @@ object ServiceLocator {
 
     val apiClient: MaApiClient by lazy { MaApiClient(httpClient) }
     val api: MaApi by lazy { MaApi(apiClient) }
+
+    /** App-scoped scope for the player mirror; lives as long as the process. */
+    private val repoScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+
+    /** Single server mirror for player/queue/now-playing state. */
+    val playerRepository: PlayerRepository by lazy { PlayerRepository(api, apiClient, repoScope) }
 
     @Volatile
     var sendspinClient: SendspinClient? = null
@@ -182,7 +191,6 @@ object ServiceLocator {
             return SendspinConfig(
                 clientId = clientId,
                 deviceName = deviceName,
-                codecPreference = Codecs.default,
                 enabled = false
             )
         }
@@ -197,7 +205,6 @@ object ServiceLocator {
         return SendspinConfig(
             clientId = clientId,
             deviceName = deviceName,
-            codecPreference = Codecs.default,
             serverHost = host,
             serverPort = port,
             serverPath = path,
