@@ -13,8 +13,8 @@ android {
         applicationId = "io.musicassistant.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "5.0.0"
+        versionCode = 9
+        versionName = "5.0.1"
     }
 
     signingConfigs {
