@@ -16,7 +16,4 @@ data class AppSettings(
         val keepScreenOn: Boolean = false,
         val themeMode: ThemeMode = ThemeMode.DARK,
         val playerId: String = "",
-        val playerName: String = "",
-        val codecPreference: String = "OPUS",
-        val playerEnabled: Boolean = true
 )

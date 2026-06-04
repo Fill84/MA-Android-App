@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,7 +42,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
@@ -51,14 +51,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.musicassistant.companion.data.model.ConfigEntry
 import io.musicassistant.companion.data.model.Player
-import io.musicassistant.companion.data.sendspin.audio.Codec
-import io.musicassistant.companion.data.sendspin.audio.Codecs
-import io.musicassistant.companion.data.sendspin.audio.codecByName
 import io.musicassistant.companion.data.settings.SettingsModule
-import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,12 +73,13 @@ fun PlayerSettingsScreen(
     val context = LocalContext.current
     val settingsRepository = remember { SettingsModule.getRepository(context) }
     val settings by settingsRepository.settingsFlow.collectAsState(initial = null)
-    val scope = rememberCoroutineScope()
 
     val currentSettings = settings ?: return
 
-    // Music Assistant server-side config for this player (dynamic schema).
+    // Music Assistant server-side config for this player (dynamic schema). This is the single source
+    // of truth for the player name, enabled flag and audio format — no local duplicates.
     val configState by configViewModel.state.collectAsState()
+    val config = configState.config
     LaunchedEffect(player?.playerId) {
         player?.playerId?.let { configViewModel.load(it) }
     }
@@ -83,7 +87,7 @@ fun PlayerSettingsScreen(
     val topBarColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
             .compositeOver(MaterialTheme.colorScheme.background)
 
-    val displayName = player?.name ?: currentSettings.playerName.ifEmpty { "Local Player" }
+    val displayName = config?.name ?: config?.defaultName ?: player?.name ?: "Local Player"
 
     Scaffold(
             topBar = {
@@ -155,68 +159,55 @@ fun PlayerSettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Player name edit
-                    var editName by remember(currentSettings.playerName) {
-                        mutableStateOf(currentSettings.playerName)
-                    }
-                    OutlinedTextField(
-                            value = editName,
-                            onValueChange = { editName = it },
-                            label = { Text("Player name") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            supportingText = {
-                                Text("Name shown in Music Assistant")
-                            }
-                    )
-                    // Auto-save on focus loss / value change with debounce
-                    if (editName != currentSettings.playerName) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedButton(
-                                onClick = {
-                                    scope.launch { settingsRepository.setPlayerName(editName.trim()) }
+                    if (config != null) {
+                        // Player name → server config (top-level `name`); saved via "Save changes".
+                        OutlinedTextField(
+                                value = currentConfigValue(config, configState.edited, NAME_KEY).asText(),
+                                onValueChange = {
+                                    configViewModel.setValue(NAME_KEY, JsonPrimitive(it))
+                                },
+                                label = { Text("Player name") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                supportingText = { Text("Name shown in Music Assistant") }
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Player enabled → server config (top-level `enabled`).
+                        SwitchItem(
+                                title = "Player enabled",
+                                description = "Register this device as a player in Music Assistant",
+                                checked = currentConfigValue(config, configState.edited, ENABLED_KEY)
+                                        .asBool(config.enabled),
+                                onCheckedChange = {
+                                    configViewModel.setValue(ENABLED_KEY, JsonPrimitive(it))
                                 }
-                        ) { Text("Save") }
+                        )
+                    } else {
+                        Text(
+                                text = "Loading player settings…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Player enabled toggle
-                    SwitchItem(
-                            title = "Local player enabled",
-                            description = "Register this device as a player in Music Assistant",
-                            checked = currentSettings.playerEnabled,
-                            onCheckedChange = {
-                                scope.launch { settingsRepository.setPlayerEnabled(it) }
-                            }
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // AUDIO SECTION
-                SectionHeader("AUDIO")
-                SettingsCard {
-                    // Codec preference
-                    CodecDropdown(
-                            currentCodec = codecByName(currentSettings.codecPreference) ?: Codecs.default,
-                            onCodecSelected = { codec ->
-                                scope.launch { settingsRepository.setCodecPreference(codec.name) }
-                            }
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Info about current codec
-                    val currentCodec = codecByName(currentSettings.codecPreference) ?: Codecs.default
-                    Text(
-                            text = currentCodec.uiTitle(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // AUDIO SECTION — server config `preferred_sendspin_format` (no local duplicate).
+                val codecEntry = config?.codecEntry()
+                if (codecEntry != null) {
+                    SectionHeader("AUDIO")
+                    SettingsCard {
+                        ServerCodecDropdown(
+                                entry = codecEntry,
+                                currentValue = currentConfigValue(config, configState.edited, codecEntry.key),
+                                onSelect = { configViewModel.setValue(codecEntry.key, it) },
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
-
-                Spacer(modifier = Modifier.height(24.dp))
 
                 // MUSIC ASSISTANT SERVER SETTINGS (dynamic schema)
                 if (player != null) {
@@ -359,51 +350,66 @@ private fun SwitchItem(
     }
 }
 
+/**
+ * Audio-format selector backed by the Music Assistant `preferred_sendspin_format` config entry.
+ * Reads the entry's options/value and writes the chosen value into the shared config dirty-flow, so
+ * the single "Save changes" button commits it (same SSOT as every other server setting).
+ */
 @Composable
-private fun CodecDropdown(currentCodec: Codec, onCodecSelected: (Codec) -> Unit) {
+private fun ServerCodecDropdown(
+        entry: ConfigEntry,
+        currentValue: JsonElement?,
+        onSelect: (JsonElement) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
+    val selectedTitle = entry.options.firstOrNull { it.value == currentValue }?.title
+            ?: currentValue.asText().ifEmpty { entry.label }
 
-    Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                    text = "Audio codec",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
-            )
-            Text(
-                    text = "Preferred streaming codec",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Spacer(modifier = Modifier.width(16.dp))
-
-        OutlinedButton(onClick = { expanded = true }) {
-            Text(text = currentCodec.name)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            Codecs.list.forEach { codec ->
-                DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(codec.name, fontWeight = FontWeight.Medium)
-                                Text(
-                                        codec.uiTitle(),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        },
-                        onClick = {
-                            onCodecSelected(codec)
-                            expanded = false
-                        }
-                )
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(
+                text = "Audio codec",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+        )
+        Text(
+                text = "Preferred streaming format (Music Assistant decides on \"automatic\")",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                            selectedTitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                    )
+                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                }
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                entry.options.forEach { option ->
+                    DropdownMenuItem(
+                            text = { Text(option.title) },
+                            onClick = {
+                                option.value?.let(onSelect)
+                                expanded = false
+                            },
+                    )
+                }
             }
         }
     }
 }
+
+private fun JsonElement?.asText(): String =
+        if (this == null || this is JsonNull) "" else (this as? JsonPrimitive)?.contentOrNull ?: ""
+
+private fun JsonElement?.asBool(default: Boolean): Boolean =
+        (this as? JsonPrimitive)?.booleanOrNull ?: default

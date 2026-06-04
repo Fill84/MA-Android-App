@@ -1,13 +1,10 @@
 package io.musicassistant.companion.data.sendspin
 
-import io.musicassistant.companion.data.sendspin.audio.Codec
-
 data class SendspinConfig(
     val clientId: String,
     val deviceName: String,
     val enabled: Boolean = true,
     val bufferCapacityMicros: Int = 500_000, // 500ms
-    val codecPreference: Codec,
 
     // Server connection settings
     val serverHost: String = "",

@@ -7,7 +7,6 @@ import io.musicassistant.companion.data.sendspin.ClockSynchronizer
 import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.data.sendspin.SendspinConfig
 import io.musicassistant.companion.data.sendspin.audio.AudioStreamManager
-import io.musicassistant.companion.data.sendspin.audio.Codecs
 import io.musicassistant.companion.auto.AutoBrowseCallback
 import io.musicassistant.companion.media.ArtworkFallback
 import io.musicassistant.companion.media.ArtworkPipeline
@@ -182,7 +181,6 @@ object ServiceLocator {
             return SendspinConfig(
                 clientId = clientId,
                 deviceName = deviceName,
-                codecPreference = Codecs.default,
                 enabled = false
             )
         }
@@ -197,7 +195,6 @@ object ServiceLocator {
         return SendspinConfig(
             clientId = clientId,
             deviceName = deviceName,
-            codecPreference = Codecs.default,
             serverHost = host,
             serverPort = port,
             serverPath = path,
