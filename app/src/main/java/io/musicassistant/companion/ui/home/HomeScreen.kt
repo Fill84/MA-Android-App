@@ -64,6 +64,7 @@ fun HomeScreen(
         homeViewModel: HomeViewModel,
         playerViewModel: PlayerViewModel,
         onAlbumClick: (String) -> Unit,
+        onArtistClick: (String) -> Unit = {},
         onTrackClick: (Track) -> Unit,
         onPlayerClick: (Player) -> Unit = {},
         onPlayerLongClick: (Player) -> Unit = {},
@@ -242,7 +243,9 @@ fun HomeScreen(
                                             imageUrl =
                                                     artist.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
-                                                    }
+                                                    },
+                                            onClick = { onArtistClick(artist.itemId) },
+                                            onLongClick = { onMediaLongClick(MediaContextMenuItem(artist.name, artist.uri, MediaType.ARTIST)) }
                                     )
                                 }
                             }

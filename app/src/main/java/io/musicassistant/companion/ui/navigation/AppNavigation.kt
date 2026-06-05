@@ -217,6 +217,9 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             onAlbumClick = { albumId ->
                                 innerNavController.navigate("album/$albumId")
                             },
+                            onArtistClick = { artistId ->
+                                innerNavController.navigate("artist/$artistId")
+                            },
                             onTrackClick = { track ->
                                 playerViewModel.playMedia(track.uri, MediaType.TRACK, "play")
                             },

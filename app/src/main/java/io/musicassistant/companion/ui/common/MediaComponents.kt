@@ -600,9 +600,23 @@ fun AlbumCard(album: Album, imageUrl: String?, onClick: () -> Unit, onLongClick:
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ArtistCard(artist: Artist, imageUrl: String?, size: Dp = 140.dp) {
-    Column(modifier = Modifier.width(size).padding(4.dp)) {
+fun ArtistCard(
+        artist: Artist,
+        imageUrl: String?,
+        onClick: (() -> Unit)? = null,
+        onLongClick: (() -> Unit)? = null,
+        size: Dp = 140.dp
+) {
+    val haptic = LocalHapticFeedback.current
+    Column(modifier = Modifier.width(size).combinedClickable(
+            onClick = { onClick?.invoke() },
+            onLongClick = if (onLongClick != null) {{
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onLongClick()
+            }} else null
+    ).padding(4.dp)) {
         Surface(
                 shape = RoundedCornerShape(14.dp),
                 tonalElevation = 1.dp,
