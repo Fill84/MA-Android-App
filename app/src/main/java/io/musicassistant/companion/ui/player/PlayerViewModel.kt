@@ -164,12 +164,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * is not yet in the list, so the mini-player is never needlessly empty.
      */
     private fun autoSelectPlayingPlayer() {
-        combine(_players, ownPlayerId) { list, _ -> list }
-                .onEach { list ->
+        combine(_players, ownPlayerId) { list, own -> list to own }
+                .onEach { (list, own) ->
                     if (userSelected) return@onEach
                     val deviceId = thisDeviceId()
+                    // Until our own id is known, don't fall back to another playing player — that
+                    // would briefly select the wrong player and then flip to this device (flicker).
                     val pick = list.firstOrNull { it.playerId == deviceId }
-                            ?: list.firstOrNull { it.state == PlayerState.PLAYING }
+                            ?: if (own != null) list.firstOrNull { it.state == PlayerState.PLAYING } else null
                     if (pick != null && pick.playerId != _activePlayer.value?.playerId) {
                         Log.d(TAG, "auto-select this-device/now-playing: ${pick.playerId} (${pick.name}) state=${pick.state}")
                         applyActivePlayer(pick)

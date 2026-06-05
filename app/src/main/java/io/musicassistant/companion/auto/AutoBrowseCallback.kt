@@ -20,9 +20,11 @@ import io.musicassistant.companion.data.model.Album
 import io.musicassistant.companion.data.model.Artist
 import io.musicassistant.companion.data.model.ConnectionState
 import io.musicassistant.companion.data.model.MediaItemImage
+import io.musicassistant.companion.data.model.MediaType
 import io.musicassistant.companion.data.model.Playlist
 import io.musicassistant.companion.data.model.Radio
 import io.musicassistant.companion.data.model.Track
+import io.musicassistant.companion.data.player.DevicePlayer
 import io.musicassistant.companion.data.settings.SettingsModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -324,9 +326,13 @@ class AutoBrowseCallback(
         scope.launch {
             try {
                 val settingsRepo = SettingsModule.getRepository(context)
-                val settings = settingsRepo.settingsFlow.first()
-                val queueId = settings.playerId.ifEmpty { return@launch }
-                api.playMedia(queueId, uri, mediaType, "play")
+                val rawId = settingsRepo.settingsFlow.first().playerId.ifEmpty { return@launch }
+                // Resolve "this device" to its universal player — the raw ma_ sink ignores commands.
+                val players = runCatching { api.getPlayers() }.getOrElse { emptyList() }
+                val target = DevicePlayer.resolveId(rawId, players) ?: rawId
+                // Containers replace the queue and start at track 1; a single track plays now.
+                val option = if (mediaType == MediaType.TRACK) "play" else "replace"
+                api.playMedia(target, uri, mediaType, option)
             } catch (e: Exception) {
                 Log.e(TAG, "playMediaId failed: ${e.message}")
             }
