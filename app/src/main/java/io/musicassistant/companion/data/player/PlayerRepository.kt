@@ -8,11 +8,14 @@ import io.musicassistant.companion.data.model.PlayerQueue
 import io.musicassistant.companion.data.model.QueueItem
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -40,6 +43,38 @@ class PlayerRepository(
             buildSessionFlow(playerId)
                 .shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1)
         }
+
+    /**
+     * Session for "this device", resolving the raw Sendspin id ([rawPlayerId], `ma_<suffix>`) to the
+     * universal player MA actually exposes (`upma_<suffix>`) — the one that holds the queue, now-playing
+     * and play-state. The raw `ma_` is only the audio sink and is never a valid session key. The id is
+     * resolved once it appears in the player list (and re-resolved after re-authentication); from then
+     * on the underlying [session] drives all live updates. See [DevicePlayer].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun deviceSession(rawPlayerId: String): Flow<PlayerSession> =
+        deviceIdFlow(rawPlayerId).flatMapLatest { id -> session(id) }
+
+    private fun deviceIdFlow(rawPlayerId: String): Flow<String> = channelFlow {
+        var resolved: String? = null
+        suspend fun tryResolve() {
+            if (resolved != null) return
+            val players = runCatching { api.getPlayers() }.getOrElse { emptyList() }
+            val id = DevicePlayer.resolveId(rawPlayerId, players)
+            if (id != null) { resolved = id; send(id) }
+        }
+        if (apiClient.connectionState.value == ConnectionState.AUTHENTICATED) tryResolve()
+        launch {
+            apiClient.connectionState.drop(1).collect { state ->
+                if (state == ConnectionState.AUTHENTICATED) { resolved = null; tryResolve() }
+            }
+        }
+        apiClient.events.collect { event ->
+            if (resolved == null && (event.event == "player_added" || event.event == "player_updated")) {
+                tryResolve()
+            }
+        }
+    }.distinctUntilChanged()
 
     private fun effectiveQueueId(player: Player): String =
         player.activeSource?.takeIf { it.isNotBlank() } ?: player.playerId
