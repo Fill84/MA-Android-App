@@ -370,7 +370,20 @@ class MusicService : LifecycleService() {
         // Re-target commands/queue at the universal player the session resolved to (never raw ma_).
         activePlayerId = session.playerId
         activeQueueId = session.effectiveQueueId
-        val np = session.nowPlaying ?: return
+        val np = session.nowPlaying
+        if (np == null) {
+            // Queue emptied (e.g. "clear queue") — clear the now-playing so the notification/session
+            // don't keep showing the last track. Only act if we were actually showing something.
+            if (currentQueueItemId != null) {
+                currentQueueItemId = null
+                deviceIsLive = false
+                coordinator.clear()
+                mediaPlayer.setKnownDuration(C.TIME_UNSET)
+                setLocalPlaying(false)
+                updateNotification()
+            }
+            return
+        }
         deviceIsLive = np.isLive
 
         if (np.currentQueueItemId != currentQueueItemId) {

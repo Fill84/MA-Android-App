@@ -133,7 +133,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         observeSelectedSession()
         autoSelectPlayingPlayer()
         viewModelScope.launch {
-            runCatching { ownPlayerId.value = settingsRepo.settingsFlow.first().playerId }
+            runCatching {
+                val settings = settingsRepo.settingsFlow.first()
+                ownPlayerId.value = settings.playerId
+                // Restore the user's last explicit player choice; the session supplies the active
+                // player. A blank value falls through to the this-device default in autoSelect.
+                val saved = settings.selectedPlayerId
+                if (saved.isNotBlank()) {
+                    userSelected = true
+                    selectedId.value = saved
+                }
+            }
         }
     }
 
@@ -428,6 +438,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectPlayer(playerId: String) {
         userSelected = true
+        viewModelScope.launch { runCatching { settingsRepo.setSelectedPlayerId(playerId) } }
         val selected = players.value.find { it.playerId == playerId }
         if (selected != null) {
             applyActivePlayer(selected)

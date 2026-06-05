@@ -254,7 +254,13 @@ class StreamAudioPlayer(context: Context) {
         return try {
             val written = track.write(data, 0, data.size)
             if (written < 0) {
-                Log.w(TAG, "AudioTrack write error: $written")
+                val reason = when (written) {
+                    AudioTrack.ERROR_INVALID_OPERATION -> "INVALID_OPERATION (track not playing)"
+                    AudioTrack.ERROR_BAD_VALUE -> "BAD_VALUE"
+                    AudioTrack.ERROR_DEAD_OBJECT -> "DEAD_OBJECT (needs recreation)"
+                    else -> "ERROR ($written)"
+                }
+                Log.w(TAG, "AudioTrack write failed: $reason")
                 0
             } else {
                 written

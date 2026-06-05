@@ -52,14 +52,24 @@ class MediaMetadataCoordinator(
      * LRU so a long session (e.g. hours of radio, hundreds of songs) can't grow it without limit.
      * Accessed from both push callers and async fetch coroutines, so guard every access.
      */
-    private val lastBytesByTrackId = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean =
+    private data class CachedArt(val url: String?, val bytes: ByteArray)
+    private val lastBytesByTrackId = object : LinkedHashMap<String, CachedArt>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedArt>): Boolean =
             size > MAX_CACHED_TRACKS
     }
 
-    @Synchronized private fun cachedBytes(trackId: String): ByteArray? = lastBytesByTrackId[trackId]
-    @Synchronized private fun cacheBytes(trackId: String, bytes: ByteArray) {
-        lastBytesByTrackId[trackId] = bytes
+    /**
+     * Cached bytes for [trackId]. If [wantUrl] is non-null and differs from the URL the bytes were
+     * cached under, treat it as a miss so a track whose cover URL changed server-side refetches
+     * (instead of showing stale art). A null [wantUrl] (e.g. a Sendspin text-only update) always
+     * reuses the cached bytes — that preservation is the whole point of this cache.
+     */
+    @Synchronized private fun cachedBytes(trackId: String, wantUrl: String?): ByteArray? {
+        val e = lastBytesByTrackId[trackId] ?: return null
+        return if (wantUrl != null && e.url != null && e.url != wantUrl) null else e.bytes
+    }
+    @Synchronized private fun cacheBytes(trackId: String, url: String?, bytes: ByteArray) {
+        lastBytesByTrackId[trackId] = CachedArt(url, bytes)
     }
 
     /**
@@ -68,7 +78,15 @@ class MediaMetadataCoordinator(
      * fallback chain: per-track cover → station logo → app-icon fallback.
      */
     private data class LiveContext(val isLive: Boolean, val stationBytes: ByteArray?)
-    @Volatile private var liveContext = LiveContext(false, null)
+    private val liveLock = Any()
+    private var liveContext = LiveContext(false, null)
+    private fun readLive(): LiveContext = synchronized(liveLock) { liveContext }
+    private fun updateLiveFlag(isLive: Boolean) = synchronized(liveLock) {
+        liveContext = liveContext.copy(isLive = isLive)
+    }
+    private fun setLive(isLive: Boolean, stationBytes: ByteArray?) = synchronized(liveLock) {
+        liveContext = LiveContext(isLive, stationBytes)
+    }
 
     /**
      * Push a full queue/player update. `current` is required; `prev`/`next` may be null.
@@ -81,7 +99,7 @@ class MediaMetadataCoordinator(
         isLive: Boolean = false
     ) {
         val myToken = sequence.incrementAndGet()
-        liveContext = liveContext.copy(isLive = isLive)
+        updateLiveFlag(isLive)
 
         // Resolve the current track's bytes from the cache exactly once, and reuse the
         // result for both the immediate emit and the "do we need to fetch?" decision.
@@ -89,7 +107,7 @@ class MediaMetadataCoordinator(
             ?.takeIf { it.isNotBlank() }
             ?.let { pipeline.cachedOrNull(it) }
         val currentBytes = cached
-            ?: cachedBytes(current.trackId)
+            ?: cachedBytes(current.trackId, current.artworkUrl)
             ?: fallbackBytes
         val enrichedCurrent = current.copy(artworkBytes = currentBytes)
 
@@ -103,7 +121,7 @@ class MediaMetadataCoordinator(
             scope.launch {
                 val fetched = pipeline.fetch(current.artworkUrl)
                 if (fetched != null && myToken == sequence.get()) {
-                    cacheBytes(current.trackId, fetched)
+                    cacheBytes(current.trackId, current.artworkUrl, fetched)
                     val existing = _snapshot.value
                     emit(existing.copy(current = existing.current.copy(artworkBytes = fetched)))
                 }
@@ -123,12 +141,12 @@ class MediaMetadataCoordinator(
         val candidate = TrackMetadata(title = title, artist = artist, album = album, artworkUrl = artworkUrl, artworkBytes = null)
         val currentSnap = _snapshot.value
         val current = currentSnap.current
-        val ctx = liveContext
+        val ctx = readLive()
 
         val cached = artworkUrl?.takeIf { it.isNotBlank() }?.let { pipeline.cachedOrNull(it) }
         val bytes = cached
             ?: (if (current.trackId == candidate.trackId && current.hasArtwork) current.artworkBytes else null)
-            ?: cachedBytes(candidate.trackId)
+            ?: cachedBytes(candidate.trackId, candidate.artworkUrl)
             ?: ctx.stationBytes      // radio station logo (track has no per-track cover)
             ?: fallbackBytes         // app-icon (no station logo either)
         emit(
@@ -144,7 +162,7 @@ class MediaMetadataCoordinator(
             scope.launch {
                 val fetched = pipeline.fetch(artworkUrl)
                 if (fetched != null && myToken == sequence.get()) {
-                    cacheBytes(candidate.trackId, fetched)
+                    cacheBytes(candidate.trackId, artworkUrl, fetched)
                     val existing = _snapshot.value
                     emit(existing.copy(current = existing.current.copy(artworkBytes = fetched)))
                 }
@@ -159,7 +177,7 @@ class MediaMetadataCoordinator(
      * still showing the app-icon fallback and a station logo is now available, it's upgraded in place.
      */
     fun setLiveContext(isLive: Boolean, stationBytes: ByteArray?) {
-        liveContext = LiveContext(isLive, stationBytes)
+        setLive(isLive, stationBytes)
         val snap = _snapshot.value
         val cur = snap.current
         val curBytes = cur.artworkBytes
@@ -178,6 +196,13 @@ class MediaMetadataCoordinator(
         )
     }
 
+    /** Clear the now-playing snapshot — e.g. the device queue was emptied. */
+    fun clear() {
+        sequence.incrementAndGet()
+        setLive(false, null)
+        emit(QueueSnapshot.EMPTY)
+    }
+
     /** Release the coroutine scope. Call from MusicService.onDestroy. */
     fun release() {
         parentJob.cancel()
@@ -189,7 +214,7 @@ class MediaMetadataCoordinator(
         meta.artworkUrl?.takeIf { it.isNotBlank() }?.let { url ->
             pipeline.cachedOrNull(url)?.let { return it }
         }
-        cachedBytes(meta.trackId)?.let { return it }
+        cachedBytes(meta.trackId, meta.artworkUrl)?.let { return it }
         return null
     }
 
