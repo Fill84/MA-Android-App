@@ -313,20 +313,14 @@ class StreamAudioPlayer(context: Context) {
     }
 
     /**
-     * Apply the MA player volume by mapping it to the SYSTEM media (STREAM_MUSIC) volume — a single
-     * attenuation — instead of multiplying the AudioTrack by volume/100 on top of the system/Bluetooth
-     * volume. The old approach made playback quadratically quieter than other apps, very noticeable
-     * over Bluetooth where the system volume is slaved to the car's absolute volume (issue 3).
+     * Apply the MA player volume as a software gain on the AudioTrack (0..1). We do NOT touch the
+     * system/car media volume — that belongs to the user/car and controls overall loudness, exactly
+     * like other media apps (YouTube Music etc.). The earlier approach slaved the system volume to
+     * the MA volume, which both fought the user turning the car volume up and left playback quieter.
+     * At MA volume 100 this is unity, so we are as loud as any other app at the same device volume.
      */
     fun setVolume(volume: Int) {
         currentVolume = volume.coerceIn(0, 100)
-        try {
-            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val index = volumePercentToStreamIndex(currentVolume, max)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error setting system volume", e)
-        }
         applyVolume()
     }
 
@@ -341,14 +335,11 @@ class StreamAudioPlayer(context: Context) {
         return if (max > 0) (current * 100 / max).coerceIn(0, 100) else 0
     }
 
-    /**
-     * The AudioTrack stays at unity gain; only mute attenuates it. The real volume control is the
-     * system STREAM_MUSIC level (see [setVolume]), so we never stack a second software attenuation.
-     */
+    /** Apply the MA volume as the AudioTrack's linear gain (0..1); mute forces 0. */
     private fun applyVolume() {
         val track = audioTrack ?: return
         try {
-            track.setVolume(if (isMuted) 0f else 1f)
+            track.setVolume(if (isMuted) 0f else currentVolume / 100f)
         } catch (e: Exception) {
             Log.e(TAG, "Error setting volume", e)
         }
