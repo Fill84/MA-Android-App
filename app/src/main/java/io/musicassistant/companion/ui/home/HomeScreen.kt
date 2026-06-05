@@ -313,7 +313,7 @@ fun HomeScreen(
                                                     radio.resolvedImage?.let {
                                                         homeViewModel.getImageUrl(it)
                                                     },
-                                            onClick = { playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play") },
+                                            onClick = { playerViewModel.playMedia(radio.uri, MediaType.RADIO, "replace") },
                                             onLongClick = { onMediaLongClick(MediaContextMenuItem(radio.name, radio.uri, MediaType.RADIO)) }
                                     )
                                 }
