@@ -152,15 +152,18 @@ fun MiniPlayer(
                     )
                 }
 
-                IconButton(
-                        onClick = { playerViewModel.next() },
-                        modifier = Modifier.size(44.dp),
-                ) {
-                    Icon(
-                            Icons.Default.SkipNext,
-                            contentDescription = "Next",
-                            tint = MaterialTheme.colorScheme.onSurface
-                    )
+                // Skipping is meaningless for a live stream.
+                if (!isLive) {
+                    IconButton(
+                            onClick = { playerViewModel.next() },
+                            modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                                Icons.Default.SkipNext,
+                                contentDescription = "Next",
+                                tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
         }
