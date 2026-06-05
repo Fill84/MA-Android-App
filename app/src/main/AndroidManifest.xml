@@ -45,6 +45,9 @@
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaLibraryService"/>
+                <!-- Legacy action so platform media clients (incl. the Bluetooth AVRCP browsable-
+                     player enumerator) discover this as a media player and enable cover art. -->
+                <action android:name="android.media.browse.MediaBrowserService"/>
             </intent-filter>
         </service>
 
