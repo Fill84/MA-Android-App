@@ -35,6 +35,7 @@ class MediaMetadataCoordinator(
 
     companion object {
         private const val TAG = "MetadataCoordinator"
+        private const val MAX_CACHED_TRACKS = 64
     }
 
     private val parentJob = SupervisorJob()
@@ -46,8 +47,20 @@ class MediaMetadataCoordinator(
     /** Bumped on every push; async fetches compare against it to drop stale results. */
     private val sequence = AtomicLong(0)
 
-    /** Last known bytes keyed by trackId — preserves artwork across Sendspin-only updates. */
-    private val lastBytesByTrackId = mutableMapOf<String, ByteArray>()
+    /**
+     * Last known bytes keyed by trackId — preserves artwork across Sendspin-only updates. Bounded
+     * LRU so a long session (e.g. hours of radio, hundreds of songs) can't grow it without limit.
+     * Accessed from both push callers and async fetch coroutines, so guard every access.
+     */
+    private val lastBytesByTrackId = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean =
+            size > MAX_CACHED_TRACKS
+    }
+
+    @Synchronized private fun cachedBytes(trackId: String): ByteArray? = lastBytesByTrackId[trackId]
+    @Synchronized private fun cacheBytes(trackId: String, bytes: ByteArray) {
+        lastBytesByTrackId[trackId] = bytes
+    }
 
     /**
      * Source context, set by the service after probing the player: whether the current source is
@@ -76,7 +89,7 @@ class MediaMetadataCoordinator(
             ?.takeIf { it.isNotBlank() }
             ?.let { pipeline.cachedOrNull(it) }
         val currentBytes = cached
-            ?: lastBytesByTrackId[current.trackId]
+            ?: cachedBytes(current.trackId)
             ?: fallbackBytes
         val enrichedCurrent = current.copy(artworkBytes = currentBytes)
 
@@ -90,7 +103,7 @@ class MediaMetadataCoordinator(
             scope.launch {
                 val fetched = pipeline.fetch(current.artworkUrl)
                 if (fetched != null && myToken == sequence.get()) {
-                    lastBytesByTrackId[current.trackId] = fetched
+                    cacheBytes(current.trackId, fetched)
                     val existing = _snapshot.value
                     emit(existing.copy(current = existing.current.copy(artworkBytes = fetched)))
                 }
@@ -115,7 +128,7 @@ class MediaMetadataCoordinator(
         val cached = artworkUrl?.takeIf { it.isNotBlank() }?.let { pipeline.cachedOrNull(it) }
         val bytes = cached
             ?: (if (current.trackId == candidate.trackId && current.hasArtwork) current.artworkBytes else null)
-            ?: lastBytesByTrackId[candidate.trackId]
+            ?: cachedBytes(candidate.trackId)
             ?: ctx.stationBytes      // radio station logo (track has no per-track cover)
             ?: fallbackBytes         // app-icon (no station logo either)
         emit(
@@ -131,7 +144,7 @@ class MediaMetadataCoordinator(
             scope.launch {
                 val fetched = pipeline.fetch(artworkUrl)
                 if (fetched != null && myToken == sequence.get()) {
-                    lastBytesByTrackId[candidate.trackId] = fetched
+                    cacheBytes(candidate.trackId, fetched)
                     val existing = _snapshot.value
                     emit(existing.copy(current = existing.current.copy(artworkBytes = fetched)))
                 }
@@ -176,7 +189,7 @@ class MediaMetadataCoordinator(
         meta.artworkUrl?.takeIf { it.isNotBlank() }?.let { url ->
             pipeline.cachedOrNull(url)?.let { return it }
         }
-        lastBytesByTrackId[meta.trackId]?.let { return it }
+        cachedBytes(meta.trackId)?.let { return it }
         return null
     }
 

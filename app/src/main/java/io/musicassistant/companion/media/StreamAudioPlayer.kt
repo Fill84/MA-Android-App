@@ -11,6 +11,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import io.musicassistant.companion.data.sendspin.MediaPlayerListener
 import io.musicassistant.companion.data.sendspin.model.AudioCodec
 
@@ -350,7 +351,11 @@ class StreamAudioPlayer(context: Context) {
     private fun registerNoisyAudioReceiver() {
         if (!isNoisyReceiverRegistered) {
             val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-            appContext.registerReceiver(noisyAudioReceiver, filter)
+            // ACTION_AUDIO_BECOMING_NOISY is a protected system broadcast (no crash without the flag),
+            // but declare NOT_EXPORTED explicitly for correctness/lint on API 33+.
+            ContextCompat.registerReceiver(
+                appContext, noisyAudioReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED
+            )
             isNoisyReceiverRegistered = true
         }
     }

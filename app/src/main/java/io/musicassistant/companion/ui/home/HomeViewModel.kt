@@ -70,28 +70,29 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (_isLoading.value) return
         _isLoading.value = true
         viewModelScope.launch {
-            try {
-                _recentlyPlayed.value =
-                        api.getLibraryTracks(limit = 20, orderBy = "last_played desc")
-                _recentAlbums.value =
-                        api.getLibraryAlbums(limit = 20, orderBy = "timestamp_added desc")
-                _recentTracks.value =
-                        api.getLibraryTracks(limit = 20, orderBy = "timestamp_added desc")
-                _randomArtists.value = api.getLibraryArtists(limit = 20, orderBy = "random")
-                _randomAlbums.value = api.getLibraryAlbums(limit = 20, orderBy = "random")
-                _favoriteTracks.value =
-                        api.getLibraryTracks(
-                                limit = 20,
-                                orderBy = "timestamp_added desc",
-                                favorite = true
-                        )
-                _favoriteRadios.value = api.getLibraryRadios(limit = 20, favorite = true)
-                loaded = true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load home: ${e.message}")
-            } finally {
-                _isLoading.value = false
-            }
+            // Load each section independently: a single failing request must not blank every section
+            // below it (they share no data). Each load keeps its previous value on failure.
+            suspend fun <T> safe(name: String, block: suspend () -> T): T? =
+                runCatching { block() }.getOrElse { Log.e(TAG, "Load $name failed: ${it.message}"); null }
+
+            safe("recentlyPlayed") { api.getLibraryTracks(limit = 20, orderBy = "last_played desc") }
+                ?.let { _recentlyPlayed.value = it }
+            safe("recentAlbums") { api.getLibraryAlbums(limit = 20, orderBy = "timestamp_added desc") }
+                ?.let { _recentAlbums.value = it }
+            safe("recentTracks") { api.getLibraryTracks(limit = 20, orderBy = "timestamp_added desc") }
+                ?.let { _recentTracks.value = it }
+            safe("randomArtists") { api.getLibraryArtists(limit = 20, orderBy = "random") }
+                ?.let { _randomArtists.value = it }
+            safe("randomAlbums") { api.getLibraryAlbums(limit = 20, orderBy = "random") }
+                ?.let { _randomAlbums.value = it }
+            safe("favoriteTracks") {
+                api.getLibraryTracks(limit = 20, orderBy = "timestamp_added desc", favorite = true)
+            }?.let { _favoriteTracks.value = it }
+            safe("favoriteRadios") { api.getLibraryRadios(limit = 20, favorite = true) }
+                ?.let { _favoriteRadios.value = it }
+
+            loaded = true
+            _isLoading.value = false
         }
     }
 
