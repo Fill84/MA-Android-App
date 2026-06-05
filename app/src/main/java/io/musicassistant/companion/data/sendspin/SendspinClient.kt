@@ -76,8 +76,10 @@ class SendspinClient(
     private val _playbackStoppedDueToError = MutableStateFlow<Throwable?>(null)
     val playbackStoppedDueToError: StateFlow<Throwable?> = _playbackStoppedDueToError.asStateFlow()
 
-    // Track current volume/mute state
-    private var currentVolume: Int = streamAudioPlayer.getCurrentSystemVolume()
+    // Track current volume/mute state. Default to full (100); MA drives it via volume commands and
+    // it is applied as a software gain on the stream — we no longer derive it from (or override) the
+    // system/car media volume, so the device/car volume controls overall loudness like other apps.
+    private var currentVolume: Int = 100
     private var currentMuted: Boolean = false
 
     val metadata: StateFlow<StreamMetadataPayload?>
@@ -118,9 +120,10 @@ class SendspinClient(
             // Clean up existing connection
             disconnectFromServer()
 
-            // Update current volume from system right before connecting
-            currentVolume = streamAudioPlayer.getCurrentSystemVolume()
-            Log.i(TAG, "Initializing with system volume: $currentVolume%")
+            // Keep the current MA volume across reconnects (default 100); do NOT seed it from the
+            // system volume — that circular coupling made playback track the device volume and reset
+            // it, leaving us quieter than other apps.
+            Log.i(TAG, "Connecting with MA volume: $currentVolume%")
 
             // Store transport
             transport = sendspinTransport
