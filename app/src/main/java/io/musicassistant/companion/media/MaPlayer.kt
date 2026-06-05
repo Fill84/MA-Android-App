@@ -122,12 +122,18 @@ class MaPlayer(
             )
         }
 
+        // Keep the session populated whenever we know a current track — even if the local Sendspin
+        // stream is momentarily not synchronized. Blanking the whole session (the old behaviour when
+        // !streamActive) makes Bluetooth/AVRCP drop the metadata + cover and show its placeholder.
+        // Only the play/pause state follows actual playback (streamPlaying).
+        val hasContent = snap.current.title.isNotBlank() || snap.current.artist.isNotBlank()
+
         val builder = State.Builder()
             .setAvailableCommands(commandsBuilder.build())
             .setPlayWhenReady(streamPlaying, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
-            .setPlaybackState(if (streamActive) STATE_READY else STATE_IDLE)
+            .setPlaybackState(if (hasContent) STATE_READY else STATE_IDLE)
 
-        if (!streamActive) return builder.build()
+        if (!hasContent) return builder.build()
 
         if (isLive) {
             val item = MediaItemData.Builder("current")
@@ -145,10 +151,6 @@ class MaPlayer(
         val durationUs = if (knownDurationMs > 0) knownDurationMs * 1_000L else C.TIME_UNSET
         val isSeekable = knownDurationMs > 0
 
-        val prevItem = MediaItemData.Builder("prev")
-            .setMediaItem(buildMediaItem("prev", snap.prev))
-            .setDurationUs(C.TIME_UNSET)
-            .build()
         val currentItem = MediaItemData.Builder("current")
             .setMediaItem(buildMediaItem("current", snap.current))
             .setDurationUs(durationUs)
@@ -156,13 +158,32 @@ class MaPlayer(
             .setIsDynamic(false)
             .setIsPlaceholder(false)
             .build()
-        val nextItem = MediaItemData.Builder("next")
-            .setMediaItem(buildMediaItem("next", snap.next))
-            .setDurationUs(C.TIME_UNSET)
-            .build()
 
-        builder.setPlaylist(listOf(prevItem, currentItem, nextItem))
-        builder.setCurrentMediaItemIndex(1)
+        // Only include neighbors that actually exist — never blank phantom items, which car
+        // head-units render as a ghost "Not Provided" track. Skip commands stay available above and
+        // route to the server regardless, so the buttons keep working at the boundaries.
+        val items = buildList {
+            if (snap.prev != null) {
+                add(
+                    MediaItemData.Builder("prev")
+                        .setMediaItem(buildMediaItem("prev", snap.prev))
+                        .setDurationUs(C.TIME_UNSET)
+                        .build()
+                )
+            }
+            add(currentItem)
+            if (snap.next != null) {
+                add(
+                    MediaItemData.Builder("next")
+                        .setMediaItem(buildMediaItem("next", snap.next))
+                        .setDurationUs(C.TIME_UNSET)
+                        .build()
+                )
+            }
+        }
+        val currentIndex = if (snap.prev != null) 1 else 0
+        builder.setPlaylist(items)
+        builder.setCurrentMediaItemIndex(currentIndex)
         // Always treat "previous" as "go to previous item", never "restart current track".
         builder.setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)
 
@@ -195,10 +216,14 @@ class MaPlayer(
             Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> onNextRequested?.invoke()
             Player.COMMAND_SEEK_TO_PREVIOUS,
             Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> onPreviousRequested?.invoke()
-            else -> when {
-                mediaItemIndex > 1 -> onNextRequested?.invoke()
-                mediaItemIndex < 1 -> onPreviousRequested?.invoke()
-                else -> onSeekRequested?.invoke(positionMs)
+            else -> {
+                // Current is at index 1 only when a prev item is present, else 0.
+                val curIdx = if (snapshotFlow.value.prev != null) 1 else 0
+                when {
+                    mediaItemIndex > curIdx -> onNextRequested?.invoke()
+                    mediaItemIndex < curIdx -> onPreviousRequested?.invoke()
+                    else -> onSeekRequested?.invoke(positionMs)
+                }
             }
         }
         return Futures.immediateVoidFuture()
