@@ -51,6 +51,14 @@
             </intent-filter>
         </service>
 
+        <!-- Serves cover art over content:// so the Bluetooth AVRCP cover-art service can fetch it
+             (it reads a URI/descriptor, not the in-metadata bitmap). Read-only, cover images only. -->
+        <provider
+            android:name=".media.CoverArtProvider"
+            android:authorities="io.musicassistant.companion.coverart"
+            android:exported="true"
+            android:grantUriPermissions="true" />
+
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc"/>

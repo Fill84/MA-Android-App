@@ -230,14 +230,21 @@ class MaPlayer(
     }
 
     private fun buildMediaItem(id: String, meta: TrackMetadata?): MediaItem {
+        val m = meta
+        val bytes = m?.artworkBytes?.takeIf { it.isNotEmpty() }
         val metadata = MediaMetadata.Builder()
-            .setTitle(meta?.title?.takeIf { it.isNotBlank() })
-            .setArtist(meta?.artist?.takeIf { it.isNotBlank() })
-            .setAlbumTitle(meta?.album)
+            .setTitle(m?.title?.takeIf { it.isNotBlank() })
+            .setArtist(m?.artist?.takeIf { it.isNotBlank() })
+            .setAlbumTitle(m?.album)
             .apply {
-                val bytes = meta?.artworkBytes
-                if (bytes != null && bytes.isNotEmpty()) {
+                if (bytes != null && m != null) {
                     setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                    // Also expose the cover via a content:// URI: the Bluetooth AVRCP cover-art
+                    // service (Android 13+) fetches the image from a URI/descriptor, not from these
+                    // in-metadata bytes, so without a URI cars get no cover art (verified: the
+                    // AvrcpCoverArtService stored nothing for us, but did for apps that set a URI).
+                    CoverArtStore.put(m.trackId, bytes)
+                    setArtworkUri(CoverArtProvider.uriFor(m.trackId))
                 }
             }
             .build()
