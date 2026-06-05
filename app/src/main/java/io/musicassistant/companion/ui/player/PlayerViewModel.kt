@@ -31,8 +31,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 
 /**
  * ViewModel shared across all screens that need player state. Observes the MA API events to keep
@@ -49,18 +47,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val repo = ServiceLocator.playerRepository
     private val settingsRepo = SettingsModule.getRepository(application)
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-        coerceInputValues = true
-    }
-
-    private fun tryParsePlayer(data: JsonElement?): Player? {
-        data ?: return null
-        return try { json.decodeFromJsonElement(Player.serializer(), data) }
-        catch (e: Exception) { Log.w(TAG, "Parse Player from event failed: ${e.message}"); null }
-    }
-
     // Current active player (the command target — usually this device's own player).
     private val _activePlayer = MutableStateFlow<Player?>(null)
     val activePlayer: StateFlow<Player?> = _activePlayer.asStateFlow()
@@ -75,9 +61,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _queueItems = MutableStateFlow<List<QueueItem>>(emptyList())
     val queueItems: StateFlow<List<QueueItem>> = _queueItems.asStateFlow()
 
-    // All players
-    private val _players = MutableStateFlow<List<Player>>(emptyList())
-    val players: StateFlow<List<Player>> = _players.asStateFlow()
+    // All players — single source of truth is PlayerRepository (no duplicate event handling here).
+    val players: StateFlow<List<Player>> = repo.players
 
     // Derived state — isPlaying tracks the active remote player, not local ExoPlayer
     private val _isPlaying = MutableStateFlow(false)
@@ -142,11 +127,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * device; the raw `ma_` is only the audio sink and must never be targeted.
      */
     private fun thisDeviceId(): String? =
-        ownPlayerId.value?.let { DevicePlayer.resolveId(it, _players.value) }
+        ownPlayerId.value?.let { DevicePlayer.resolveId(it, players.value) }
 
     init {
-        observeConnection()
-        observeEvents()
         observeSelectedSession()
         autoSelectPlayingPlayer()
         viewModelScope.launch {
@@ -164,7 +147,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * is not yet in the list, so the mini-player is never needlessly empty.
      */
     private fun autoSelectPlayingPlayer() {
-        combine(_players, ownPlayerId) { list, own -> list to own }
+        combine(players, ownPlayerId) { list, own -> list to own }
                 .onEach { (list, own) ->
                     if (userSelected) return@onEach
                     val deviceId = thisDeviceId()
@@ -196,68 +179,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             .launchIn(viewModelScope)
     }
 
-    private fun observeConnection() {
-        apiClient
-                .connectionState
-                .onEach { state ->
-                    if (state == ConnectionState.AUTHENTICATED) {
-                        loadInitialData()
-                    }
-                }
-                .launchIn(viewModelScope)
-    }
-
-    private fun loadInitialData() {
-        viewModelScope.launch {
-            try {
-                // Selection is handled reactively by [autoSelectPlayingPlayer]; just publish the list.
-                _players.value = api.getPlayers()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load initial data: ${e.message}")
-            }
-        }
-    }
-
     /** Make [player] the active (command-target) player. Queue/metadata come from the session. */
     private fun applyActivePlayer(player: Player) {
         _activePlayer.value = player
         _isPlaying.value = player.state == PlayerState.PLAYING
         selectedId.value = player.playerId
-    }
-
-    private fun observeEvents() {
-        apiClient
-                .events
-                .onEach { event ->
-                    when (event.event) {
-                        "player_added", "player_updated" -> handlePlayerUpdated(event)
-                    }
-                }
-                .launchIn(viewModelScope)
-    }
-
-    private fun handlePlayerUpdated(event: MaApiClient.MaEvent) {
-        val changedId = event.objectId
-        val isAdded = event.event == "player_added"
-        viewModelScope.launch {
-            try {
-                if (changedId != null && !isAdded) {
-                    val updated = tryParsePlayer(event.data) ?: api.getPlayer(changedId) ?: return@launch
-                    _players.value = if (_players.value.any { it.playerId == changedId }) {
-                        _players.value.map { if (it.playerId == changedId) updated else it }
-                    } else {
-                        _players.value + updated
-                    }
-                } else {
-                    // player_added or no objectId — full refresh to pick up new players.
-                    _players.value = api.getPlayers()
-                }
-                // Active player / queue / metadata are driven reactively by [observeSelectedSession];
-                // [autoSelectPlayingPlayer] reacts to the list update when nothing is selected yet.
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh players: ${e.message}")
-            }
-        }
     }
 
     /**
@@ -322,6 +248,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.playerPlay(playerId)
             } catch (e: Exception) {
                 Log.e(TAG, "Play failed: ${e.message}")
+                _isPlaying.value = false // revert optimistic state
+                _userMessage.tryEmit("Couldn't start playback")
             }
         }
     }
@@ -335,6 +263,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.playerPause(playerId)
             } catch (e: Exception) {
                 Log.e(TAG, "Pause failed: ${e.message}")
+                _isPlaying.value = true // revert optimistic state
+                _userMessage.tryEmit("Couldn't pause")
             }
         }
     }
@@ -346,6 +276,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.playerNext(playerId)
             } catch (e: Exception) {
                 Log.e(TAG, "Next failed: ${e.message}")
+                _userMessage.tryEmit("Couldn't skip track")
             }
         }
     }
@@ -357,6 +288,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.playerPrevious(playerId)
             } catch (e: Exception) {
                 Log.e(TAG, "Previous failed: ${e.message}")
+                _userMessage.tryEmit("Couldn't skip track")
             }
         }
     }
@@ -467,6 +399,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.queueMoveItem(q.queueId, queueItemId, positionShift)
             } catch (e: Exception) {
                 Log.e(TAG, "Move queue item failed: ${e.message}")
+                _userMessage.tryEmit("Could not move track")
             }
         }
     }
@@ -477,20 +410,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             option: String = "play"
     ) {
         viewModelScope.launch {
+            // Target the active player; fall back to THIS device's universal player (never the
+            // raw ma_ sink, which ignores playback commands).
+            val queueId = _activePlayer.value?.playerId ?: thisDeviceId()
+            if (queueId == null) {
+                _userMessage.tryEmit("No player available to play on")
+                return@launch
+            }
             try {
-                // Target the active player; fall back to THIS device's universal player (never the
-                // raw ma_ sink, which ignores playback commands).
-                val queueId = _activePlayer.value?.playerId ?: thisDeviceId() ?: return@launch
                 api.playMedia(queueId, mediaUri, mediaType, option)
             } catch (e: Exception) {
                 Log.e(TAG, "Play media failed: ${e.message}")
+                _userMessage.tryEmit("Couldn't start playback")
             }
         }
     }
 
     fun selectPlayer(playerId: String) {
         userSelected = true
-        val selected = _players.value.find { it.playerId == playerId }
+        val selected = players.value.find { it.playerId == playerId }
         if (selected != null) {
             applyActivePlayer(selected)
         } else {

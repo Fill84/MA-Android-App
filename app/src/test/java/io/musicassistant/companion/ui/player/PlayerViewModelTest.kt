@@ -52,6 +52,7 @@ class PlayerViewModelTest {
     private val application: Application = mockk(relaxed = true)
     private val repo: PlayerRepository = mockk(relaxed = true)
     private val sessionFlow = MutableSharedFlow<PlayerSession>(replay = 1)
+    private val playersFlow = MutableStateFlow<List<Player>>(emptyList())
 
     @Before
     fun setup() {
@@ -62,6 +63,7 @@ class PlayerViewModelTest {
         every { ServiceLocator.apiClient } returns apiClient
         every { ServiceLocator.playerRepository } returns repo
         every { repo.session(any()) } returns sessionFlow
+        every { repo.players } returns playersFlow
         every { apiClient.connectionState } returns MutableStateFlow(ConnectionState.DISCONNECTED)
         every { apiClient.events } returns MutableSharedFlow()
         every { SettingsModule.getRepository(any()) } returns mockk<SettingsRepository>(relaxed = true)
@@ -178,22 +180,21 @@ class PlayerViewModelTest {
      */
     @Test
     fun `auto-selects this device by default when the list loads`() = runTest(dispatcher) {
-        val conn = MutableStateFlow(ConnectionState.DISCONNECTED)
-        every { apiClient.connectionState } returns conn
         val settingsRepo = mockk<SettingsRepository>(relaxed = true)
         val appSettings = mockk<io.musicassistant.companion.data.settings.AppSettings>(relaxed = true)
         every { appSettings.playerId } returns "ma_x"
         every { settingsRepo.settingsFlow } returns kotlinx.coroutines.flow.flowOf(appSettings)
         every { SettingsModule.getRepository(any()) } returns settingsRepo
-
-        val other = Player(playerId = "spk", name = "Speaker", state = PlayerState.PLAYING)
-        val device = Player(playerId = "upma_x", name = "Pixel 5", state = PlayerState.IDLE, activeSource = "upma_x")
-        coEvery { api.getPlayers() } returns listOf(other, device)
         coEvery { api.getPlayerQueue("upma_x") } returns PlayerQueue(queueId = "upma_x")
         coEvery { api.getPlayerQueueItems("upma_x") } returns emptyList()
 
         val vm = PlayerViewModel(application)
-        conn.value = ConnectionState.AUTHENTICATED
+        advanceUntilIdle()
+        // The player list comes from PlayerRepository (single source of truth).
+        playersFlow.value = listOf(
+            Player(playerId = "spk", name = "Speaker", state = PlayerState.PLAYING),
+            Player(playerId = "upma_x", name = "Pixel 5", state = PlayerState.IDLE, activeSource = "upma_x")
+        )
         advanceUntilIdle()
 
         // This device (upma_x) wins by default over the other playing player.
