@@ -67,6 +67,7 @@ fun MiniPlayer(
         while (true) {
             positionMs = playerViewModel.currentPositionMs
             durationMs = playerViewModel.durationMs
+            if (!isPlaying) break // paused: update once, stop polling (restarts when isPlaying changes)
             delay(1000)
         }
     }

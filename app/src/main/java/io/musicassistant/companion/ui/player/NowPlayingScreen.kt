@@ -101,6 +101,7 @@ fun NowPlayingScreen(
                 while (true) {
                         positionMs = playerViewModel.currentPositionMs
                         durationMs = playerViewModel.durationMs
+                        if (!isPlaying) break // paused: update once, stop polling (restarts on change)
                         delay(500)
                 }
         }

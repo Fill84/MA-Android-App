@@ -76,7 +76,12 @@ class MusicService : LifecycleService() {
     private var connectionObserverStarted = false
     private var sendspinObserverStarted = false
     private var deviceSessionStarted = false
-    /** Command/now-playing target — the universal `upma_` player (the raw `ma_` is only the sink). */
+    /** Raw Sendspin id of this device (`ma_<suffix>`); used only to resolve the universal player. */
+    private var deviceRawId: String? = null
+    /**
+     * Command/now-playing target — the universal `upma_` player, resolved from the device session.
+     * Stays null until resolved so transport commands never hit the raw `ma_` sink (which ignores them).
+     */
     private var activePlayerId: String? = null
     /** Queue ID — usually equals the active player id, but may differ in sync groups. */
     private var activeQueueId: String? = null
@@ -184,8 +189,7 @@ class MusicService : LifecycleService() {
                     SettingsModule.getRepository(this@MusicService).setPlayerId(newId)
                     newId
                 }
-            activePlayerId = playerId
-            activeQueueId = playerId
+            deviceRawId = playerId
 
             val existingClient = ServiceLocator.sendspinClient
             if (apiClient.connectionState.value == ConnectionState.AUTHENTICATED &&
@@ -355,7 +359,7 @@ class MusicService : LifecycleService() {
      * the local audio transport (play-state) and the low-latency per-song text overlay for radio.
      */
     private fun observeDeviceSession() {
-        val rawId = activePlayerId ?: return
+        val rawId = deviceRawId ?: return
         ServiceLocator.playerRepository
             .deviceSession(rawId)
             .onEach { session -> renderDeviceNowPlaying(session) }
