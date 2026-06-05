@@ -16,4 +16,6 @@ data class AppSettings(
         val keepScreenOn: Boolean = false,
         val themeMode: ThemeMode = ThemeMode.DARK,
         val playerId: String = "",
+        /** The player the user last explicitly selected to control; restored on next launch. */
+        val selectedPlayerId: String = "",
 )

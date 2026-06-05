@@ -67,6 +67,7 @@ fun MiniPlayer(
         while (true) {
             positionMs = playerViewModel.currentPositionMs
             durationMs = playerViewModel.durationMs
+            if (!isPlaying) break // paused: update once, stop polling (restarts when isPlaying changes)
             delay(1000)
         }
     }
@@ -152,15 +153,18 @@ fun MiniPlayer(
                     )
                 }
 
-                IconButton(
-                        onClick = { playerViewModel.next() },
-                        modifier = Modifier.size(44.dp),
-                ) {
-                    Icon(
-                            Icons.Default.SkipNext,
-                            contentDescription = "Next",
-                            tint = MaterialTheme.colorScheme.onSurface
-                    )
+                // Skipping is meaningless for a live stream.
+                if (!isLive) {
+                    IconButton(
+                            onClick = { playerViewModel.next() },
+                            modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                                Icons.Default.SkipNext,
+                                contentDescription = "Next",
+                                tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
         }

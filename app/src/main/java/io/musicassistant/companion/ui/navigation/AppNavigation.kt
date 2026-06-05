@@ -217,6 +217,9 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             onAlbumClick = { albumId ->
                                 innerNavController.navigate("album/$albumId")
                             },
+                            onArtistClick = { artistId ->
+                                innerNavController.navigate("artist/$artistId")
+                            },
                             onTrackClick = { track ->
                                 playerViewModel.playMedia(track.uri, MediaType.TRACK, "play")
                             },
@@ -241,7 +244,7 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             },
                             onPlaylistClick = { innerNavController.navigate("playlist/$it") },
                             onRadioClick = { radio ->
-                                playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play")
+                                playerViewModel.playMedia(radio.uri, MediaType.RADIO, "replace")
                             },
                             onMediaLongClick = onMediaLongClick
                     )
@@ -257,7 +260,7 @@ private fun MainAppScreen(onSwitchServer: () -> Unit) {
                             },
                             onPlaylistClick = { innerNavController.navigate("playlist/$it") },
                             onRadioClick = { radio ->
-                                playerViewModel.playMedia(radio.uri, MediaType.RADIO, "play")
+                                playerViewModel.playMedia(radio.uri, MediaType.RADIO, "replace")
                             },
                             onMediaLongClick = onMediaLongClick
                     )

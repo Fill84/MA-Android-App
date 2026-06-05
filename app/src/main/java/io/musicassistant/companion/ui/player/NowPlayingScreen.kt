@@ -101,6 +101,7 @@ fun NowPlayingScreen(
                 while (true) {
                         positionMs = playerViewModel.currentPositionMs
                         durationMs = playerViewModel.durationMs
+                        if (!isPlaying) break // paused: update once, stop polling (restarts on change)
                         delay(500)
                 }
         }
@@ -285,29 +286,32 @@ fun NowPlayingScreen(
                                 horizontalArrangement = Arrangement.SpaceEvenly,
                                 verticalAlignment = Alignment.CenterVertically
                         ) {
-                                IconButton(onClick = { playerViewModel.toggleShuffle() }) {
-                                        Icon(
-                                                if (queue?.shuffleEnabled == true) Icons.Default.ShuffleOn
-                                                else Icons.Default.Shuffle,
-                                                contentDescription = "Shuffle",
-                                                tint =
-                                                        if (queue?.shuffleEnabled == true)
-                                                                MaterialTheme.colorScheme.primary
-                                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                }
+                                // Shuffle and skip controls are meaningless for a live stream.
+                                if (!isLive) {
+                                        IconButton(onClick = { playerViewModel.toggleShuffle() }) {
+                                                Icon(
+                                                        if (queue?.shuffleEnabled == true) Icons.Default.ShuffleOn
+                                                        else Icons.Default.Shuffle,
+                                                        contentDescription = "Shuffle",
+                                                        tint =
+                                                                if (queue?.shuffleEnabled == true)
+                                                                        MaterialTheme.colorScheme.primary
+                                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                        }
 
-                                // Main controls
-                                IconButton(
-                                        onClick = { playerViewModel.previous() },
-                                        modifier = Modifier.size(48.dp)
-                                ) {
-                                        Icon(
-                                                Icons.Default.SkipPrevious,
-                                                contentDescription = "Previous",
-                                                modifier = Modifier.size(32.dp),
-                                                tint = MaterialTheme.colorScheme.onBackground
-                                        )
+                                        // Main controls
+                                        IconButton(
+                                                onClick = { playerViewModel.previous() },
+                                                modifier = Modifier.size(48.dp)
+                                        ) {
+                                                Icon(
+                                                        Icons.Default.SkipPrevious,
+                                                        contentDescription = "Previous",
+                                                        modifier = Modifier.size(32.dp),
+                                                        tint = MaterialTheme.colorScheme.onBackground
+                                                )
+                                        }
                                 }
 
                                 IconButton(
@@ -336,33 +340,35 @@ fun NowPlayingScreen(
                                         )
                                 }
 
-                                IconButton(
-                                        onClick = { playerViewModel.next() },
-                                        modifier = Modifier.size(48.dp)
-                                ) {
-                                        Icon(
-                                                Icons.Default.SkipNext,
-                                                contentDescription = "Next",
-                                                modifier = Modifier.size(32.dp),
-                                                tint = MaterialTheme.colorScheme.onBackground
-                                        )
-                                }
+                                if (!isLive) {
+                                        IconButton(
+                                                onClick = { playerViewModel.next() },
+                                                modifier = Modifier.size(48.dp)
+                                        ) {
+                                                Icon(
+                                                        Icons.Default.SkipNext,
+                                                        contentDescription = "Next",
+                                                        modifier = Modifier.size(32.dp),
+                                                        tint = MaterialTheme.colorScheme.onBackground
+                                                )
+                                        }
 
-                                IconButton(onClick = { playerViewModel.toggleRepeat() }) {
-                                        val repeatIcon =
-                                                when (queue?.repeatMode) {
-                                                        RepeatMode.ONE -> Icons.Default.RepeatOneOn
-                                                        RepeatMode.ALL -> Icons.Default.RepeatOn
-                                                        else -> Icons.Default.Repeat
-                                                }
-                                        Icon(
-                                                repeatIcon,
-                                                contentDescription = "Repeat",
-                                                tint =
-                                                        if (queue?.repeatMode != RepeatMode.OFF)
-                                                                MaterialTheme.colorScheme.primary
-                                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        IconButton(onClick = { playerViewModel.toggleRepeat() }) {
+                                                val repeatIcon =
+                                                        when (queue?.repeatMode) {
+                                                                RepeatMode.ONE -> Icons.Default.RepeatOneOn
+                                                                RepeatMode.ALL -> Icons.Default.RepeatOn
+                                                                else -> Icons.Default.Repeat
+                                                        }
+                                                Icon(
+                                                        repeatIcon,
+                                                        contentDescription = "Repeat",
+                                                        tint =
+                                                                if (queue?.repeatMode != RepeatMode.OFF)
+                                                                        MaterialTheme.colorScheme.primary
+                                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                        }
                                 }
                         }
 

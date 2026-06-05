@@ -22,6 +22,7 @@ class SettingsRepository(private val context: Context) {
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val PLAYER_ID = stringPreferencesKey("player_id")
+        val SELECTED_PLAYER_ID = stringPreferencesKey("selected_player_id")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
         val USERNAME = stringPreferencesKey("username")
     }
@@ -44,6 +45,7 @@ class SettingsRepository(private val context: Context) {
                                 }
                                         ?: ThemeMode.DARK,
                         playerId = prefs[Keys.PLAYER_ID] ?: "",
+                        selectedPlayerId = prefs[Keys.SELECTED_PLAYER_ID] ?: "",
                         authToken = prefs[Keys.AUTH_TOKEN] ?: "",
                         username = prefs[Keys.USERNAME] ?: "",
                 )
@@ -94,5 +96,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPlayerId(id: String) {
         context.dataStore.edit { prefs -> prefs[Keys.PLAYER_ID] = id }
+    }
+
+    /** Persist the user's explicitly-selected player so it can be restored on next launch. */
+    suspend fun setSelectedPlayerId(id: String) {
+        context.dataStore.edit { prefs -> prefs[Keys.SELECTED_PLAYER_ID] = id }
     }
 }

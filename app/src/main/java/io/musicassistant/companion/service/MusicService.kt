@@ -23,10 +23,7 @@ import io.musicassistant.companion.R
 import io.musicassistant.companion.data.api.MaApiClient
 import io.musicassistant.companion.data.model.ConnectionState
 import io.musicassistant.companion.data.model.MediaItemImage
-import io.musicassistant.companion.data.model.MediaType
-import io.musicassistant.companion.data.model.Player
-import io.musicassistant.companion.data.model.PlayerQueue
-import io.musicassistant.companion.data.model.PlayerState
+import io.musicassistant.companion.data.player.PlayerSession
 import io.musicassistant.companion.data.sendspin.SendspinClient
 import io.musicassistant.companion.data.sendspin.SendspinState
 import io.musicassistant.companion.data.settings.SettingsModule
@@ -35,16 +32,11 @@ import io.musicassistant.companion.media.MediaMetadataCoordinator
 import io.musicassistant.companion.media.MediaSessionHost
 import io.musicassistant.companion.media.TrackMetadata
 import io.musicassistant.companion.media.resolveNeighbors
-import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 
 /**
  * Foreground service that manages the connection to the MA server and audio playback.
@@ -80,59 +72,31 @@ class MusicService : LifecycleService() {
     /** Logical play/pause state for the notification. */
     private val playingState = MutableStateFlow(false)
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-        coerceInputValues = true
-    }
-
     private var isForeground = false
     private var connectionObserverStarted = false
     private var sendspinObserverStarted = false
-    private var eventObserverStarted = false
+    private var deviceSessionStarted = false
+    /** Raw Sendspin id of this device (`ma_<suffix>`); used only to resolve the universal player. */
+    private var deviceRawId: String? = null
+    /**
+     * Command/now-playing target — the universal `upma_` player, resolved from the device session.
+     * Stays null until resolved so transport commands never hit the raw `ma_` sink (which ignores them).
+     */
     private var activePlayerId: String? = null
-    /** Queue ID — usually equals playerId, but may differ in sync groups. */
+    /** Queue ID — usually equals the active player id, but may differ in sync groups. */
     private var activeQueueId: String? = null
 
-    // Current queue item ID — used to detect track changes
+    // Current queue item ID — used to detect track changes (avoids needless metadata rebuilds).
     private var currentQueueItemId: String? = null
 
-    // Cache previous track info for MediaSession prev metadata (PlayerQueue has no previousItem).
-    private var previousTrackTitle: String? = null
-    private var previousTrackArtist: String? = null
+    /** Whether the device session's current source is live/radio (gates the Sendspin text overlay). */
+    @Volatile private var deviceIsLive = false
 
     // WakeLock to prevent CPU throttling during background playback
     private var wakeLock: PowerManager.WakeLock? = null
 
-    // ── Command-Echo Guard ──────────────────────────────────
-    private data class PendingCommand(val action: String, val timestamp: Long)
-    private val pendingCommands = ConcurrentHashMap<String, PendingCommand>()
-    private val COMMAND_ECHO_WINDOW_MS = 3000L
-
-    private fun markCommandPending(action: String) {
-        pendingCommands[action] = PendingCommand(action, SystemClock.elapsedRealtime())
-    }
-
-    private fun isCommandEcho(action: String): Boolean {
-        val pending = pendingCommands.remove(action) ?: return false
-        val isEcho = (SystemClock.elapsedRealtime() - pending.timestamp) < COMMAND_ECHO_WINDOW_MS
-        if (isEcho) Log.d(TAG, "Suppressed command echo: $action")
-        return isEcho
-    }
-
-    // ── Sendspin Reconnect Grace Period ────────────────────
+    // Tracks the last Sendspin disconnect for downtime logging on reconnect.
     @Volatile private var sendspinDisconnectedAt: Long = 0L
-    private val SENDSPIN_RECONNECT_GRACE_MS = 5000L
-
-    private fun isSendspinReconnecting(): Boolean {
-        val client = ServiceLocator.sendspinClient ?: return false
-        val state = client.state.value
-        if (state is SendspinState.Ready || state is SendspinState.Synchronized) {
-            val elapsed = SystemClock.elapsedRealtime() - sendspinDisconnectedAt
-            return elapsed < 2000L
-        }
-        return state is SendspinState.Reconnecting && sendspinDisconnectedAt > 0L
-    }
 
     // Notification dedup state
     private var lastNotifTitle: String? = null
@@ -225,8 +189,7 @@ class MusicService : LifecycleService() {
                     SettingsModule.getRepository(this@MusicService).setPlayerId(newId)
                     newId
                 }
-            activePlayerId = playerId
-            activeQueueId = playerId
+            deviceRawId = playerId
 
             val existingClient = ServiceLocator.sendspinClient
             if (apiClient.connectionState.value == ConnectionState.AUTHENTICATED &&
@@ -268,9 +231,9 @@ class MusicService : LifecycleService() {
             observeSendspinState(client)
             observeSendspinConnectionState(client)
         }
-        if (!eventObserverStarted) {
-            eventObserverStarted = true
-            observeApiEvents()
+        if (!deviceSessionStarted) {
+            deviceSessionStarted = true
+            observeDeviceSession()
         }
     }
 
@@ -285,7 +248,6 @@ class MusicService : LifecycleService() {
 
     private fun handlePlay() {
         val id = activePlayerId ?: return
-        markCommandPending("play")
         setLocalPlaying(true)
         lifecycleScope.launch {
             try {
@@ -298,7 +260,6 @@ class MusicService : LifecycleService() {
 
     private fun handlePause() {
         val id = activePlayerId ?: return
-        markCommandPending("pause")
         setLocalPlaying(false)
         lifecycleScope.launch {
             try {
@@ -311,7 +272,6 @@ class MusicService : LifecycleService() {
 
     private fun handleNext() {
         val id = activePlayerId ?: return
-        markCommandPending("next")
         lifecycleScope.launch {
             try {
                 ServiceLocator.api.playerNext(id)
@@ -323,7 +283,6 @@ class MusicService : LifecycleService() {
 
     private fun handlePrevious() {
         val id = activePlayerId ?: return
-        markCommandPending("previous")
         lifecycleScope.launch {
             try {
                 ServiceLocator.api.playerPrevious(id)
@@ -358,7 +317,6 @@ class MusicService : LifecycleService() {
                     is SendspinState.Synchronized, is SendspinState.Buffering -> {
                         mediaPlayer.setStreamActive(true)
                         playingState.value = true
-                        refreshMetadataFromServer()
                     }
                     is SendspinState.Ready, is SendspinState.Idle -> {
                         mediaPlayer.setStreamActive(false)
@@ -374,170 +332,93 @@ class MusicService : LifecycleService() {
             }
             .launchIn(lifecycleScope)
 
-        // Sendspin stream metadata (e.g. radio track changes). No artwork bytes/URL —
-        // the Coordinator preserves the current cover when the trackId is unchanged.
+        // Sendspin stream metadata = the low-latency per-song signal for RADIO/live only. For
+        // non-radio the device session (server SSOT) is authoritative, so we ignore it there to
+        // avoid two sources fighting over the now-playing.
         client.metadata
             .onEach { metadata ->
-                if (metadata != null && (metadata.title != null || metadata.artist != null)) {
+                if (deviceIsLive && metadata != null && (metadata.title != null || metadata.artist != null)) {
                     val art = metadata.artworkUrl?.let { resolveArtworkUrl(it) }
-                    Log.d(TAG, "Sendspin metadata: ${metadata.title} by ${metadata.artist} artwork=$art")
+                    Log.d(TAG, "Sendspin radio metadata: ${metadata.title} by ${metadata.artist} artwork=$art")
                     coordinator.pushSendspinMetadata(
                         title = metadata.title ?: "",
                         artist = metadata.artist ?: "",
                         album = metadata.album,
                         artworkUrl = art
                     )
-                    lifecycleScope.launch { resolveLiveContext(metadata.title) }
                 }
             }
             .launchIn(lifecycleScope)
-    }
-
-    private fun observeApiEvents() {
-        apiClient
-            .events
-            .onEach { event ->
-                when (event.event) {
-                    "queue_updated" -> handleQueueUpdated(event)
-                    "player_updated" -> handlePlayerUpdated(event)
-                }
-            }
-            .launchIn(lifecycleScope)
-    }
-
-    private var playerUpdatedJob: Job? = null
-    private var queueUpdatedJob: Job? = null
-
-    private fun tryParsePlayerQueue(data: JsonElement?): PlayerQueue? {
-        data ?: return null
-        return try {
-            json.decodeFromJsonElement(PlayerQueue.serializer(), data)
-        } catch (e: Exception) {
-            Log.w(TAG, "Parse PlayerQueue from event failed: ${e.message}"); null
-        }
-    }
-
-    private fun handleQueueUpdated(event: MaApiClient.MaEvent) {
-        val queueId = activeQueueId ?: activePlayerId ?: return
-        if (event.objectId != null && event.objectId != queueId) return
-        if (event.objectId != null) activeQueueId = event.objectId
-
-        val inlineQueue = tryParsePlayerQueue(event.data)
-
-        queueUpdatedJob?.cancel()
-        queueUpdatedJob = lifecycleScope.launch {
-            if (inlineQueue == null) delay(150)
-            try {
-                val q = inlineQueue ?: ServiceLocator.api.getPlayerQueue(queueId) ?: return@launch
-                val prevItemId = currentQueueItemId
-                if (q.currentItem?.queueItemId != prevItemId) {
-                    updateMetadataFromQueue(q)
-                } else {
-                    updateElapsedTimeFromQueue(q)
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Failed to handle queue_updated: ${e.message}")
-            }
-        }
-    }
-
-    private fun handlePlayerUpdated(event: MaApiClient.MaEvent) {
-        val id = activePlayerId ?: return
-        if (event.objectId != null && event.objectId != id) return
-
-        playerUpdatedJob?.cancel()
-        playerUpdatedJob = lifecycleScope.launch {
-            delay(200)
-            try {
-                if (isSendspinReconnecting()) {
-                    Log.d(TAG, "Skipping player_updated during Sendspin reconnect")
-                    return@launch
-                }
-                val player = ServiceLocator.api.getPlayer(id) ?: return@launch
-                when (player.state) {
-                    PlayerState.PAUSED, PlayerState.IDLE -> {
-                        if (playingState.value && !isCommandEcho("pause")) {
-                            Log.d(TAG, "External pause/stop detected, pausing locally")
-                            setLocalPlaying(false)
-                        }
-                    }
-                    PlayerState.PLAYING -> {
-                        if (!playingState.value && !isCommandEcho("play")) {
-                            Log.d(TAG, "External play detected, resuming locally")
-                            setLocalPlaying(true)
-                        }
-                    }
-                    else -> {}
-                }
-                val qId = activeQueueId ?: id
-                val q = ServiceLocator.api.getPlayerQueue(qId) ?: return@launch
-                val prevItemId = currentQueueItemId
-                if (q.currentItem?.queueItemId != prevItemId) {
-                    updateMetadataFromQueue(q)
-                } else {
-                    updateElapsedTimeFromQueue(q)
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Failed to handle player_updated: ${e.message}")
-            }
-        }
     }
 
     /**
-     * Push the now-playing track from the authoritative MA source for group/source players. Their
-     * device queue (`ma_<id>`) is empty — the real now-playing media, cover, and queue live on
-     * `player.active_source` (`upma_<id>`). The normal [updateMetadataFromQueue] path bails on the
-     * empty device queue, so for these players the session would otherwise only get the artwork-less
-     * Sendspin metadata (app-icon fallback, no neighbors). Mirrors the queue path but sources the
-     * current track (incl. real cover) from `current_media` and prev/next from the active-source
-     * queue's index/length. Standalone players (active_source == device queue) keep the existing
-     * event-driven path and are skipped here. Radio is handled by [resolveLiveContext] (live context)
-     * and never reaches this method.
+     * Drive the media surface (notification, lock screen, Bluetooth AVRCP, Auto) from the SINGLE
+     * server mirror: the device's universal-player session in [PlayerRepository]. The session already
+     * reacts to the same MA events and resolves player/queue/items centrally, so there is exactly one
+     * source of truth — no more parallel event handling or ad-hoc fetches here. Sendspin remains only
+     * the local audio transport (play-state) and the low-latency per-song text overlay for radio.
      */
-    private suspend fun pushTrackFromSource(player: Player) {
-        val id = activePlayerId ?: return
-        val deviceQueueId = activeQueueId ?: id
-        val sourceId = player.activeSource?.takeIf { it.isNotBlank() } ?: return
-        if (sourceId == deviceQueueId) return // standalone player → existing queue path handles it
+    private fun observeDeviceSession() {
+        val rawId = deviceRawId ?: return
+        ServiceLocator.playerRepository
+            .deviceSession(rawId)
+            .onEach { session -> renderDeviceNowPlaying(session) }
+            .launchIn(lifecycleScope)
+    }
 
-        val cm = player.currentMedia ?: return
-        val title = cm.title?.takeIf { it.isNotBlank() } ?: return
-        val coverUrl = cm.imageUrl?.takeIf { it.isNotBlank() }?.let { resolveArtworkUrl(it) }
-        val current = TrackMetadata(title, cm.artist ?: "", cm.album, coverUrl, null)
-
-        val q = try { ServiceLocator.api.getPlayerQueue(sourceId) } catch (e: Exception) { null }
-        val idx = q?.currentIndex
-        val total = q?.items ?: 0
-        // Resolve prev/next strictly by queue index (MA's queue.next_item is unreliable while
-        // streaming — it can echo the current item). One windowed fetch around the current index:
-        // window starts at idx-1 (clamped to 0), so [prev, current, next] for idx>0, else [current, next].
-        val window = if (idx != null && total > 0) {
-            try {
-                ServiceLocator.api.getPlayerQueueItems(sourceId, limit = 3, offset = (idx - 1).coerceAtLeast(0))
-            } catch (e: Exception) { emptyList() }
-        } else emptyList()
-        val prevCandidate = if (idx != null && idx > 0) window.getOrNull(0)?.let { queueItemToTrack(it) } else null
-        val nextCandidate = when {
-            idx == null -> null
-            idx == 0 -> window.getOrNull(1)?.let { queueItemToTrack(it) }
-            else -> window.getOrNull(2)?.let { queueItemToTrack(it) }
+    private suspend fun renderDeviceNowPlaying(session: PlayerSession) {
+        // Re-target commands/queue at the universal player the session resolved to (never raw ma_).
+        activePlayerId = session.playerId
+        activeQueueId = session.effectiveQueueId
+        val np = session.nowPlaying
+        if (np == null) {
+            // Queue emptied (e.g. "clear queue") — clear the now-playing so the notification/session
+            // don't keep showing the last track. Only act if we were actually showing something.
+            if (currentQueueItemId != null) {
+                currentQueueItemId = null
+                deviceIsLive = false
+                coordinator.clear()
+                mediaPlayer.setKnownDuration(C.TIME_UNSET)
+                setLocalPlaying(false)
+                updateNotification()
+            }
+            return
         }
-        val (prev, next) = resolveNeighbors(isLive = false, currentIndex = idx, total = total,
-            prevCandidate = prevCandidate, nextCandidate = nextCandidate)
+        deviceIsLive = np.isLive
 
-        Log.d(TAG, "source nowplaying: '$title' cover=$coverUrl idx=$idx/$total prev=${prev?.title} next=${next?.title}")
-        coordinator.pushQueueUpdate(current = current, prev = prev, next = next, isLive = false)
-        currentQueueItemId = q?.currentItem?.queueItemId
-
-        val durMs = cm.duration?.let { (it * 1000).toLong() } ?: C.TIME_UNSET
-        mediaPlayer.setKnownDuration(if (durMs > 0) durMs else C.TIME_UNSET)
-        val elapsedMs = ((cm.elapsedTime ?: 0.0) * 1000).toLong()
-        mediaPlayer.setKnownElapsed(elapsedMs, player.state == PlayerState.PLAYING)
-        if ((player.state == PlayerState.PLAYING) != playingState.value) {
-            setLocalPlaying(player.state == PlayerState.PLAYING)
+        if (np.currentQueueItemId != currentQueueItemId) {
+            currentQueueItemId = np.currentQueueItemId
+            val coverUrl = np.currentMediaImageUrl?.let { resolveArtworkUrl(it) }
+                ?: np.artworkImage?.let { getImageUrl(it) }
+            val current = TrackMetadata(np.title, np.artist, np.album, coverUrl, null)
+            if (np.isLive) {
+                // Radio: station logo as fallback cover + single-item timeline (no phantom neighbors).
+                // Per-song text is refined by the Sendspin metadata overlay.
+                coordinator.setLiveContext(true, resolveStationLogo(np.artworkImage?.let { getImageUrl(it) }))
+                Log.d(TAG, "device nowplaying (radio): '${np.title}' cover=$coverUrl")
+                coordinator.pushQueueUpdate(current = current, prev = null, next = null, isLive = true)
+            } else {
+                coordinator.setLiveContext(false, null)
+                val idx = np.currentIndex
+                val total = session.queue?.items ?: session.queueItems.size
+                val prevCandidate = if (idx != null && idx > 0)
+                    session.queueItems.getOrNull(idx - 1)?.let { queueItemToTrack(it) } else null
+                val nextCandidate = if (idx != null)
+                    session.queueItems.getOrNull(idx + 1)?.let { queueItemToTrack(it) } else null
+                val (prev, next) = resolveNeighbors(
+                    isLive = false, currentIndex = idx, total = total,
+                    prevCandidate = prevCandidate, nextCandidate = nextCandidate
+                )
+                Log.d(TAG, "device nowplaying: '${np.title}' cover=$coverUrl idx=$idx/$total prev=${prev?.title} next=${next?.title}")
+                coordinator.pushQueueUpdate(current = current, prev = prev, next = next, isLive = false)
+            }
+            mediaPlayer.invalidate()
         }
+
+        // Timeline on every emit (cheap; no metadata rebuild). Play-state stays Sendspin-driven.
+        mediaPlayer.setKnownDuration(if (np.durationMs > 0) np.durationMs else C.TIME_UNSET)
+        mediaPlayer.setKnownElapsed(np.elapsedMs, session.isPlaying)
+        updateNotification()
     }
 
     /** Build [TrackMetadata] from a queue item (prefers its media-item fields, falls back to the item). */
@@ -553,155 +434,19 @@ class MusicService : LifecycleService() {
         )
     }
 
-    private fun refreshMetadataFromServer() {
-        val queueId = activeQueueId ?: activePlayerId ?: return
-        lifecycleScope.launch {
-            try {
-                val q = ServiceLocator.api.getPlayerQueue(queueId) ?: return@launch
-                updateMetadataFromQueue(q)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh metadata: ${e.message}")
-            }
-        }
-    }
-
-    // ── Live/radio source detection (station-logo fallback + single-item timeline) ──
-    private var lastSourceProbeTitle: String? = null
+    // Radio station logo cache — fallback cover for radio tracks without per-track art.
     @Volatile private var cachedStationUrl: String? = null
     @Volatile private var cachedStationBytes: ByteArray? = null
 
-    /**
-     * Probe the player to learn whether the current source is radio/live, and if so resolve the
-     * station logo from the active-source queue. Feeds the Coordinator's live context so radio shows
-     * a single-item timeline (no phantom prev/next) and falls back to the station logo — not the app
-     * icon — when a radio track carries no per-track cover. The station logo is cached per URL.
-     */
-    private suspend fun resolveLiveContext(title: String?) {
-        if (title == lastSourceProbeTitle) return
-        lastSourceProbeTitle = title
-        val id = activePlayerId ?: return
-        try {
-            val player = ServiceLocator.api.getPlayer(id) ?: return
-            val isLive = player.currentMedia?.mediaType == "radio"
-            if (!isLive) {
-                coordinator.setLiveContext(false, null)
-                // Group/source players have an empty device queue, so the event-driven queue path
-                // never fires — push the real now-playing (cover + neighbors) from the active source.
-                pushTrackFromSource(player)
-                return
-            }
-            // The queue lives on the active source; its current item carries the station logo.
-            val sourceId = player.activeSource?.takeIf { it.isNotBlank() } ?: id
-            val q = ServiceLocator.api.getPlayerQueue(sourceId)
-            val stationImg = q?.currentItem?.image ?: q?.currentItem?.mediaItem?.image
-            val stationUrl = stationImg?.let { getImageUrl(it) }
-            if (stationUrl != null && stationUrl != cachedStationUrl) {
-                cachedStationBytes = ServiceLocator.getArtworkPipeline().fetch(stationUrl)
-                cachedStationUrl = stationUrl
-                Log.d(TAG, "radio station logo: $stationUrl (${cachedStationBytes?.size ?: 0} bytes)")
-            }
-            coordinator.setLiveContext(true, cachedStationBytes)
-        } catch (e: Exception) {
-            Log.w(TAG, "resolveLiveContext failed: ${e.message}")
+    /** Fetch (and cache per URL) the radio station logo bytes used as the radio fallback cover. */
+    private suspend fun resolveStationLogo(stationUrl: String?): ByteArray? {
+        if (stationUrl == null) return cachedStationBytes
+        if (stationUrl != cachedStationUrl) {
+            cachedStationBytes = runCatching { ServiceLocator.getArtworkPipeline().fetch(stationUrl) }.getOrNull()
+            cachedStationUrl = stationUrl
+            Log.d(TAG, "radio station logo: $stationUrl (${cachedStationBytes?.size ?: 0} bytes)")
         }
-    }
-
-    // ── Metadata → Coordinator ──────────────────────────────
-
-    /**
-     * Build [TrackMetadata] from the queue and push it to the Coordinator, which resolves artwork
-     * bytes (download + fallback) and emits the snapshot. For radio/live the now-playing song lives
-     * in `player.current_media` — its title/artist AND its `image_url` (the real song cover) are
-     * used, with the station image as a fallback (issue 1). Radio pushes with isLive=true so there
-     * are no phantom prev/next neighbors (issue 4).
-     */
-    private fun updateMetadataFromQueue(queue: PlayerQueue) {
-        val currentItem = queue.currentItem ?: return
-        val media = currentItem.mediaItem ?: return
-        currentQueueItemId = currentItem.queueItemId
-        val isRadio = media.mediaType == MediaType.RADIO
-
-        lifecycleScope.launch {
-            if (isRadio) {
-                val player = try {
-                    ServiceLocator.api.getPlayer(activePlayerId ?: return@launch)
-                } catch (e: Exception) {
-                    null
-                }
-                val cm = player?.currentMedia
-                val title = cm?.title?.takeIf { it.isNotBlank() }
-                    ?: currentItem.name.ifBlank { media.name }
-                val artist = cm?.artist?.takeIf { it.isNotBlank() } ?: media.name
-                val album = cm?.album ?: media.name
-                // Prefer the now-playing song cover; fall back to the station logo.
-                val artworkUrl = cm?.imageUrl?.takeIf { it.isNotBlank() }
-                    ?: (media.image ?: currentItem.image)?.let { getImageUrl(it) }
-
-                Log.d(TAG, "radio metadata: title='$title' artist='$artist' artwork=$artworkUrl")
-                coordinator.pushQueueUpdate(
-                    current = TrackMetadata(title, artist, album, artworkUrl, null),
-                    prev = null,
-                    next = null,
-                    isLive = true
-                )
-                mediaPlayer.setKnownDuration(C.TIME_UNSET)
-            } else {
-                val title = media.name
-                val artist = media.artists.joinToString(", ") { it.name }
-                val album = media.album?.name
-                val artworkUrl = (media.image ?: currentItem.image)?.let { getImageUrl(it) }
-
-                val prev = if (previousTrackTitle != null || previousTrackArtist != null) {
-                    TrackMetadata(previousTrackTitle ?: "", previousTrackArtist ?: "", null, null, null)
-                } else null
-
-                val nextMedia = queue.nextItem?.mediaItem
-                val next = if (nextMedia != null) {
-                    TrackMetadata(
-                        title = nextMedia.name,
-                        artist = nextMedia.artists.joinToString(", ") { it.name },
-                        album = nextMedia.album?.name,
-                        artworkUrl = nextMedia.image?.let { getImageUrl(it) },
-                        artworkBytes = null
-                    )
-                } else null
-
-                Log.d(TAG, "track metadata: title='$title' artist='$artist' prev='$previousTrackTitle' next='${nextMedia?.name}' artwork=$artworkUrl")
-                coordinator.pushQueueUpdate(
-                    current = TrackMetadata(title, artist, album, artworkUrl, null),
-                    prev = prev,
-                    next = next,
-                    isLive = false
-                )
-
-                previousTrackTitle = title
-                previousTrackArtist = artist
-
-                if (currentItem.duration > 0) {
-                    mediaPlayer.setKnownDuration(currentItem.duration * 1000L)
-                } else {
-                    mediaPlayer.setKnownDuration(C.TIME_UNSET)
-                }
-            }
-
-            val elapsedMs = (queue.elapsedTime * 1000).toLong()
-            val playing = queue.state == PlayerState.PLAYING
-            mediaPlayer.setKnownElapsed(elapsedMs, playing)
-            if (playing != playingState.value) setLocalPlaying(playing)
-            mediaPlayer.invalidate()
-            updateNotification()
-        }
-    }
-
-    /** Lightweight update — only elapsed time/duration, no metadata rebuild. */
-    private fun updateElapsedTimeFromQueue(queue: PlayerQueue) {
-        val currentItem = queue.currentItem ?: return
-        if (currentItem.duration > 0) {
-            mediaPlayer.setKnownDuration(currentItem.duration * 1000L)
-        }
-        val elapsedMs = (queue.elapsedTime * 1000).toLong()
-        val playing = queue.state == PlayerState.PLAYING
-        mediaPlayer.setKnownElapsed(elapsedMs, playing)
+        return cachedStationBytes
     }
 
     private fun getImageUrl(image: MediaItemImage): String {

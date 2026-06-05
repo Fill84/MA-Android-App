@@ -8,12 +8,19 @@ import io.musicassistant.companion.data.model.PlayerQueue
 import io.musicassistant.companion.data.model.QueueItem
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -40,6 +47,57 @@ class PlayerRepository(
             buildSessionFlow(playerId)
                 .shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1)
         }
+
+    /**
+     * The single server-mirrored player list. The ONE place that loads `getPlayers()` and folds in
+     * `player_added`/`player_updated`/`player_removed` events; every consumer (UI picker, device
+     * resolution) reads from here instead of handling player events itself.
+     */
+    val players: StateFlow<List<Player>> = channelFlow {
+        val byId = LinkedHashMap<String, Player>()
+        suspend fun reload() {
+            val list = runCatching { api.getPlayers() }.getOrElse { return }
+            byId.clear()
+            list.forEach { byId[it.playerId] = it }
+            send(byId.values.toList())
+        }
+        if (apiClient.connectionState.value == ConnectionState.AUTHENTICATED) reload()
+        launch {
+            apiClient.connectionState.drop(1).collect { state ->
+                if (state == ConnectionState.AUTHENTICATED) reload()
+            }
+        }
+        apiClient.events.collect { event ->
+            when (event.event) {
+                "player_added", "player_updated" -> {
+                    val p = tryParsePlayer(event.data)
+                        ?: event.objectId?.let { id -> runCatching { api.getPlayer(id) }.getOrNull() }
+                        ?: return@collect
+                    byId[p.playerId] = p
+                    send(byId.values.toList())
+                }
+                "player_removed" -> {
+                    val id = event.objectId ?: return@collect
+                    if (byId.remove(id) != null) send(byId.values.toList())
+                }
+            }
+        }
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Session for "this device", resolving the raw Sendspin id ([rawPlayerId], `ma_<suffix>`) to the
+     * universal player MA actually exposes (`upma_<suffix>`) — the one that holds the queue, now-playing
+     * and play-state. The raw `ma_` is only the audio sink and is never a valid session key. Resolution
+     * follows the central [players] list, so it converges as the device registers and after re-auth;
+     * from then on the underlying [session] drives all live updates. See [DevicePlayer].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun deviceSession(rawPlayerId: String): Flow<PlayerSession> =
+        players
+            .map { DevicePlayer.resolveId(rawPlayerId, it) }
+            .filterNotNull()
+            .distinctUntilChanged()
+            .flatMapLatest { id -> session(id) }
 
     private fun effectiveQueueId(player: Player): String =
         player.activeSource?.takeIf { it.isNotBlank() } ?: player.playerId

@@ -205,7 +205,7 @@ fun ArtistDetailScreen(
                                                                                                 .playMedia(
                                                                                                         it,
                                                                                                         MediaType.ARTIST,
-                                                                                                        "play"
+                                                                                                        "replace"
                                                                                                 )
                                                                                 }
                                                                         }
@@ -457,7 +457,7 @@ fun AlbumDetailScreen(
                                                                                                 .playMedia(
                                                                                                         it,
                                                                                                         MediaType.ALBUM,
-                                                                                                        "play"
+                                                                                                        "replace"
                                                                                                 )
                                                                                 }
                                                                         }
@@ -663,7 +663,7 @@ fun PlaylistDetailScreen(
                                                                                                 .playMedia(
                                                                                                         it,
                                                                                                         MediaType.PLAYLIST,
-                                                                                                        "play"
+                                                                                                        "replace"
                                                                                                 )
                                                                                 }
                                                                         }

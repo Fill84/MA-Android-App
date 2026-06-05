@@ -52,6 +52,7 @@ class PlayerViewModelTest {
     private val application: Application = mockk(relaxed = true)
     private val repo: PlayerRepository = mockk(relaxed = true)
     private val sessionFlow = MutableSharedFlow<PlayerSession>(replay = 1)
+    private val playersFlow = MutableStateFlow<List<Player>>(emptyList())
 
     @Before
     fun setup() {
@@ -62,6 +63,7 @@ class PlayerViewModelTest {
         every { ServiceLocator.apiClient } returns apiClient
         every { ServiceLocator.playerRepository } returns repo
         every { repo.session(any()) } returns sessionFlow
+        every { repo.players } returns playersFlow
         every { apiClient.connectionState } returns MutableStateFlow(ConnectionState.DISCONNECTED)
         every { apiClient.events } returns MutableSharedFlow()
         every { SettingsModule.getRepository(any()) } returns mockk<SettingsRepository>(relaxed = true)
@@ -171,25 +173,31 @@ class PlayerViewModelTest {
     }
 
     /**
-     * Regression for the empty mini-player on app restart: when nothing is selected and the player
-     * list arrives, the playing player must be auto-selected (not the idle one) so the now-playing
-     * bar reflects active playback. Mirrors the real setup where the playing "Pixel 5" card is a
-     * universal player whose own id differs from this device's raw Sendspin player id.
+     * SSOT rule: this device is the default active player. The list exposes this device only as its
+     * universal wrapper `upma_<suffix>` (raw `ma_<suffix>` is the sink and never appears), so it must
+     * be resolved by suffix and selected by default — even while idle and even when another player is
+     * playing — unless the user picked another. Also guards against the empty mini-player on restart.
      */
     @Test
-    fun `auto-selects the playing player when the list loads`() = runTest(dispatcher) {
-        val conn = MutableStateFlow(ConnectionState.DISCONNECTED)
-        every { apiClient.connectionState } returns conn
-        val idle = Player(playerId = "spk", name = "Speaker", state = PlayerState.IDLE)
-        val playing = Player(playerId = "upma_x", name = "Pixel 5", state = PlayerState.PLAYING, activeSource = "upma_x")
-        coEvery { api.getPlayers() } returns listOf(idle, playing)
+    fun `auto-selects this device by default when the list loads`() = runTest(dispatcher) {
+        val settingsRepo = mockk<SettingsRepository>(relaxed = true)
+        val appSettings = mockk<io.musicassistant.companion.data.settings.AppSettings>(relaxed = true)
+        every { appSettings.playerId } returns "ma_x"
+        every { settingsRepo.settingsFlow } returns kotlinx.coroutines.flow.flowOf(appSettings)
+        every { SettingsModule.getRepository(any()) } returns settingsRepo
         coEvery { api.getPlayerQueue("upma_x") } returns PlayerQueue(queueId = "upma_x")
         coEvery { api.getPlayerQueueItems("upma_x") } returns emptyList()
 
         val vm = PlayerViewModel(application)
-        conn.value = ConnectionState.AUTHENTICATED
+        advanceUntilIdle()
+        // The player list comes from PlayerRepository (single source of truth).
+        playersFlow.value = listOf(
+            Player(playerId = "spk", name = "Speaker", state = PlayerState.PLAYING),
+            Player(playerId = "upma_x", name = "Pixel 5", state = PlayerState.IDLE, activeSource = "upma_x")
+        )
         advanceUntilIdle()
 
+        // This device (upma_x) wins by default over the other playing player.
         assertEquals("upma_x", vm.activePlayer.value?.playerId)
     }
 
