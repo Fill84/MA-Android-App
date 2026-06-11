@@ -165,9 +165,15 @@ class OkHttpSendspinTransport(
     }
 
     private fun attemptReconnect() {
-        reconnectJob?.cancel()
+        // Idempotent: if a reconnect loop is already running, do NOT restart it. The old code
+        // cancelled + relaunched on every onClosed/onFailure, resetting the backoff ladder to
+        // attempt 0 each time. Since a failing doConnect() itself fires onFailure, this collapsed
+        // the exponential backoff into a ~0–2s hot reconnect spin that hammered the radio 24/7
+        // against an unreachable/flapping server. One loop owns the ladder; it grows monotonically
+        // until onOpen resets reconnectAttempts to 0.
+        if (reconnectJob?.isActive == true) return
         reconnectJob = launch {
-            var attempt = 0
+            var attempt = reconnectAttempts
             while (!explicitDisconnect) {
                 reconnectAttempts = attempt + 1
                 Log.i(TAG, "Reconnect attempt $reconnectAttempts")
