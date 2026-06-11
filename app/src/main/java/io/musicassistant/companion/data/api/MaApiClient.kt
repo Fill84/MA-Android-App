@@ -10,6 +10,7 @@ import kotlin.math.min
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -49,6 +50,8 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         private const val TAG = "MaApiClient"
         private const val INITIAL_BACKOFF_MS = 1000L
         private const val MAX_BACKOFF_MS = 60_000L
+        /** A connection must survive this long after auth before the backoff ladder resets. */
+        private const val STABLE_CONNECTION_MS = 30_000L
     }
 
     private val json = Json {
@@ -66,6 +69,8 @@ class MaApiClient(private val httpClient: OkHttpClient) {
     private var authToken: String? = null
     @Volatile private var shouldReconnect = false
     private var backoffMs = INITIAL_BACKOFF_MS
+    /** Pending "connection proved stable → reset backoff" job (see scheduleBackoffResetIfStable). */
+    private var stableResetJob: Job? = null
 
     private val messageId = AtomicInteger(1)
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JsonElement>>()
@@ -107,6 +112,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
     /** Disconnect and stop reconnecting. */
     fun disconnect() {
         shouldReconnect = false
+        stableResetJob?.cancel()
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _connectionState.value = ConnectionState.DISCONNECTED
@@ -217,6 +223,22 @@ class MaApiClient(private val httpClient: OkHttpClient) {
         webSocket = httpClient.newWebSocket(request, WsListener(gen))
     }
 
+    /**
+     * Reset the reconnect backoff to its floor only after the connection has proven STABLE for a
+     * while. Resetting immediately on auth let a server that authenticates then drops within seconds
+     * hot-reconnect at 1s forever; this keeps the exponential ladder growing for a flapping server
+     * while still snapping back to fast reconnects once a connection actually holds.
+     */
+    private fun scheduleBackoffResetIfStable() {
+        stableResetJob?.cancel()
+        stableResetJob = scope.launch {
+            delay(STABLE_CONNECTION_MS)
+            if (_connectionState.value == ConnectionState.AUTHENTICATED) {
+                backoffMs = INITIAL_BACKOFF_MS
+            }
+        }
+    }
+
     private fun scheduleReconnect() {
         if (!shouldReconnect) return
         val delay = backoffMs
@@ -293,7 +315,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
                 }
                 // Events are auto-subscribed by the server after auth
                 _connectionState.value = ConnectionState.AUTHENTICATED
-                backoffMs = INITIAL_BACKOFF_MS
+                scheduleBackoffResetIfStable()
                 Log.d(TAG, "Connected and authenticated")
             } catch (e: Exception) {
                 Log.e(TAG, "Auth failed: ${e.message}")
@@ -324,7 +346,7 @@ class MaApiClient(private val httpClient: OkHttpClient) {
                 Log.d(TAG, "Auth result: $result")
                 // Events are auto-subscribed by the server after auth
                 _connectionState.value = ConnectionState.AUTHENTICATED
-                backoffMs = INITIAL_BACKOFF_MS
+                scheduleBackoffResetIfStable()
                 Log.d(TAG, "Authenticated successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "Auth/subscribe failed: ${e.message}")
