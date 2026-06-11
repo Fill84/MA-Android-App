@@ -60,6 +60,11 @@ class MessageDispatcher(
     companion object {
         private const val TAG = "MessageDispatcher"
 
+        /** Clock-sync cadence while a stream is active — tight for accurate audio timing. */
+        private const val CLOCK_SYNC_ACTIVE_MS = 1_000L
+        /** Clock-sync cadence while idle (no stream) — relaxed; no audio to keep in sync. */
+        private const val CLOCK_SYNC_IDLE_MS = 5_000L
+
         private val json = Json {
             prettyPrint = false
             encodeDefaults = true
@@ -81,6 +86,9 @@ class MessageDispatcher(
 
     private var messageListenerJob: Job? = null
     private var clockSyncJob: Job? = null
+
+    /** True while a stream is playing — gates the clock-sync cadence (tight vs relaxed). */
+    @Volatile private var streamActive = false
 
     private val _serverHelloEvent = MutableSharedFlow<ServerHelloPayload>(extraBufferCapacity = 1)
     val serverHelloEvent: Flow<ServerHelloPayload> = _serverHelloEvent.asSharedFlow()
@@ -301,7 +309,7 @@ class MessageDispatcher(
             while (isActive) {
                 try {
                     sendTime()
-                    delay(1000)
+                    delay(if (streamActive) CLOCK_SYNC_ACTIVE_MS else CLOCK_SYNC_IDLE_MS)
                 } catch (_: IllegalStateException) {
                     Log.w(TAG, "Clock sync stopped: Transport not connected")
                     break
@@ -329,11 +337,17 @@ class MessageDispatcher(
 
     private suspend fun handleStreamStart(message: StreamStartMessage) {
         Log.i(TAG, "Received stream/start")
+        // Audio is about to play: tighten clock sync immediately (restart does an instant sendTime
+        // and switches the loop to the active cadence) so timing is accurate from the first frame.
+        streamActive = true
+        startClockSync()
         _streamStartEvent.emit(message)
     }
 
     private suspend fun handleStreamEnd(message: StreamEndMessage) {
         Log.i(TAG, "Received stream/end")
+        // Stream stopped: relax clock sync to the idle cadence (no audio left to keep in sync).
+        streamActive = false
         _streamEndEvent.emit(message)
     }
 

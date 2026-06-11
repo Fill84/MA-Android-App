@@ -128,8 +128,13 @@ class MusicService : LifecycleService() {
         mediaPlayer.onSeekRequested = { positionMs -> handleSeek(positionMs) }
 
         val pm = getSystemService(PowerManager::class.java)
+        // Created here but deliberately NOT acquired. The wakelock is held ONLY while this device is
+        // actually rendering audio locally (acquireWakeLock/releaseWakeLock, driven by the Sendspin
+        // stream state in observeSendspinState). Acquiring it unconditionally for the whole service
+        // lifetime pinned the CPU awake 24/7 — even when paused, idle, controlling a remote player,
+        // or screen-off — which defeated Android Doze and drained the battery. onDestroy still
+        // releases it as a safety net.
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MusicAssistant::Playback")
-        wakeLock?.acquire(4 * 60 * 60 * 1000L) // 4-hour timeout safety net
 
         startForeground()
         observePlaybackState()
@@ -246,6 +251,29 @@ class MusicService : LifecycleService() {
         updateNotification()
     }
 
+    /**
+     * Hold a PARTIAL_WAKE_LOCK ONLY while this device is actually decoding/playing audio locally.
+     * Acquired on the first Sendspin Synchronized/Buffering, released on Ready/Idle/Error. When
+     * paused, idle, controlling a remote player, or screen-off-with-nothing-playing, the CPU is free
+     * to enter Doze. The 4-hour cap is only a safety net for a single very long session; releasing
+     * on idle is what actually fixes the battery drain.
+     */
+    private fun acquireWakeLock() {
+        val wl = wakeLock ?: return
+        if (!wl.isHeld) {
+            wl.acquire(4 * 60 * 60 * 1000L)
+            Log.d(TAG, "WakeLock acquired (local audio active)")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        val wl = wakeLock ?: return
+        if (wl.isHeld) {
+            wl.release()
+            Log.d(TAG, "WakeLock released (local audio inactive)")
+        }
+    }
+
     private fun handlePlay() {
         val id = activePlayerId ?: return
         setLocalPlaying(true)
@@ -317,15 +345,18 @@ class MusicService : LifecycleService() {
                     is SendspinState.Synchronized, is SendspinState.Buffering -> {
                         mediaPlayer.setStreamActive(true)
                         playingState.value = true
+                        acquireWakeLock() // local audio is rendering — keep the CPU awake
                     }
                     is SendspinState.Ready, is SendspinState.Idle -> {
                         mediaPlayer.setStreamActive(false)
                         playingState.value = false
+                        releaseWakeLock() // no local audio — let the device sleep/Doze
                     }
                     is SendspinState.Error -> {
                         Log.e(TAG, "Sendspin error: ${state.error}")
                         mediaPlayer.setStreamActive(false)
                         playingState.value = false
+                        releaseWakeLock()
                     }
                     else -> {}
                 }
