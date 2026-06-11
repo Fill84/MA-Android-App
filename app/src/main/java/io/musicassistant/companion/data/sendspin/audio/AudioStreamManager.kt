@@ -59,6 +59,14 @@ class AudioStreamManager(
 
     companion object {
         private const val TAG = "AudioStreamManager"
+
+        /**
+         * Poll interval for the consumer when no frame is ready (queue below reorderDepth). Only hit
+         * when frames stop arriving while the stream stays open (pause-with-open-stream or a
+         * mid-stream WS reconnect). The old delay(2) spun ~500 wakeups/sec — a real screen-off CPU
+         * drain; 20ms still recovers within one reorder window once frames resume.
+         */
+        private const val STARVATION_POLL_MS = 20L
     }
 
     private val supervisorJob = SupervisorJob()
@@ -239,7 +247,7 @@ class AudioStreamManager(
                             streamAudioPlayer.writeRawPcm(pcmData)
                         }
                     } else {
-                        delay(2)
+                        delay(STARVATION_POLL_MS)
                     }
                 }
             } catch (_: CancellationException) {
